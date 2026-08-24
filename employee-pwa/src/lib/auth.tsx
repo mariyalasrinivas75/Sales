@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { onAuthChange, signIn, signOut, type User } from "./firebase";
 import { getUserRole, getEmployeeProfile, type Employee, type UserRole } from "./supabase";
+import { subscribeToPush } from "./push";
 
 interface AuthContextType {
   user: User | null;
@@ -32,6 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const profile = await getEmployeeProfile(firebaseUser.uid);
             setEmployee(profile);
             setError(null);
+            void subscribeToPush(firebaseUser.uid);
           } else if (userRole === "admin") {
             // Admins should use the web dashboard, not the employee app
             setError("Please use the Admin Dashboard. This app is for employees only.");

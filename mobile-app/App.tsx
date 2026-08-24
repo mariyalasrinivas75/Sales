@@ -63,10 +63,19 @@ function AdminTabs() {
 
 // ── Employee Tab Navigator ──
 function EmployeeTabs() {
-  const { employee, logout } = useAuth();
+  const { employee, logout, alarmPermissionsOk, grantAlarmPermissions } = useAuth();
 
   return (
-    <Tab.Navigator
+    <View style={{ flex: 1 }}>
+      {!alarmPermissionsOk && (
+        <TouchableOpacity style={styles.permissionBanner} onPress={grantAlarmPermissions}>
+          <Ionicons name="alarm-outline" size={16} color="white" />
+          <Text style={styles.permissionBannerText}>
+            Reminders are off — tap to allow alarms & notifications
+          </Text>
+        </TouchableOpacity>
+      )}
+      <Tab.Navigator
       screenOptions={{
         tabBarStyle: {
           backgroundColor: colors.surfaceSolid,
@@ -102,13 +111,14 @@ function EmployeeTabs() {
           tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size} color={color} />,
         }}
       />
-    </Tab.Navigator>
+      </Tab.Navigator>
+    </View>
   );
 }
 
 // ── App Shell ──
 function AppContent() {
-  const { user, role, loading } = useAuth();
+  const { user, role, loading, logout } = useAuth();
 
   if (loading) {
     return (
@@ -143,6 +153,9 @@ function AppContent() {
       <Text style={styles.errorText}>
         Your account is not registered in the system. Please contact your admin.
       </Text>
+      <TouchableOpacity style={styles.signOutBtn} onPress={logout}>
+        <Text style={styles.signOutBtnText}>Sign Out</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -201,5 +214,31 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     textAlign: "center",
     lineHeight: 22,
+  },
+  signOutBtn: {
+    marginTop: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    borderRadius: 10,
+    backgroundColor: colors.accent,
+  },
+  signOutBtnText: {
+    color: "white",
+    fontWeight: "600",
+    fontSize: 15,
+  },
+  permissionBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: colors.danger,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  permissionBannerText: {
+    color: "white",
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

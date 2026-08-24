@@ -68,12 +68,17 @@ export default function DashboardPage() {
           const planTotal = planAnswers.reduce((sum: number, a: Record<string, unknown>) => sum + (a.value as number), 0);
           const achTotal = achAnswers.reduce((sum: number, a: Record<string, unknown>) => sum + (a.value as number), 0);
 
+          // "Completed" means every active question was answered in both
+          // phases — having at least one answer in each phase is not enough
+          // (a partial submission before the deadline was previously read as
+          // "completed").
+          const planComplete = qs.length > 0 && planAnswers.length >= qs.length;
+          const achComplete = qs.length > 0 && achAnswers.length >= qs.length;
+
           let status: EmployeeStatus["status"] = "not_started";
-          if (planAnswers.length > 0 && achAnswers.length > 0) {
+          if (planComplete && achComplete) {
             status = "completed";
-          } else if (achAnswers.length > 0) {
-            status = "completed";
-          } else if (planAnswers.length > 0) {
+          } else if (planAnswers.length > 0 || achAnswers.length > 0) {
             const now = new Date();
             const hour = now.getHours();
             if (hour >= 17) {

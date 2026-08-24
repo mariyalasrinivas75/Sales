@@ -18,6 +18,7 @@ import {
   toggleLeave,
   type Employee,
 } from "../../lib/supabase";
+import { createEmployeeAccount } from "../../lib/firebase";
 import { todayIST } from "../../lib/utils";
 import { colors } from "../../lib/theme";
 
@@ -27,7 +28,8 @@ export default function AdminEmployeesScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
-  const [form, setForm] = useState({ id: "", emp_code: "", name: "", email: "", phone: "" });
+  const [form, setForm] = useState({ id: "", emp_code: "", name: "", email: "", phone: "", password: "" });
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -45,13 +47,13 @@ export default function AdminEmployeesScreen() {
 
   const openAdd = () => {
     setEditingEmp(null);
-    setForm({ id: "", emp_code: "", name: "", email: "", phone: "" });
+    setForm({ id: "", emp_code: "", name: "", email: "", phone: "", password: "" });
     setShowModal(true);
   };
 
   const openEdit = (emp: Employee) => {
     setEditingEmp(emp);
-    setForm({ id: emp.id, emp_code: emp.emp_code, name: emp.name, email: emp.email || "", phone: emp.phone || "" });
+    setForm({ id: emp.id, emp_code: emp.emp_code, name: emp.name, email: emp.email || "", phone: emp.phone || "", password: "" });
     setShowModal(true);
   };
 
@@ -60,6 +62,7 @@ export default function AdminEmployeesScreen() {
       Alert.alert("Error", "Name and employee code are required.");
       return;
     }
+    setSaving(true);
     try {
       if (editingEmp) {
         await updateEmployee(editingEmp.id, {
@@ -69,15 +72,18 @@ export default function AdminEmployeesScreen() {
           phone: form.phone || null,
         });
       } else {
-        if (!form.id.trim()) {
-          Alert.alert("Error", "Firebase UID is required for new employees.");
+        if (!form.email.trim() || !form.password.trim()) {
+          Alert.alert("Error", "Email and password are required to create the employee's login.");
           return;
         }
+        // Creates the Firebase Auth login and the employees row in one step —
+        // admin only ever enters email + password, no manual UID copy-paste.
+        const uid = await createEmployeeAccount(form.email.trim(), form.password);
         await createEmployee({
-          id: form.id,
+          id: uid,
           emp_code: form.emp_code,
           name: form.name,
-          email: form.email || null,
+          email: form.email.trim(),
           phone: form.phone || null,
           active: true,
         });
@@ -86,6 +92,8 @@ export default function AdminEmployeesScreen() {
       load();
     } catch (err: any) {
       Alert.alert("Error", err.message || "Failed to save.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -166,19 +174,6 @@ export default function AdminEmployeesScreen() {
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>{editingEmp ? "Edit Employee" : "Add Employee"}</Text>
 
-            {!editingEmp && (
-              <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Firebase UID *</Text>
-                <TextInput
-                  style={styles.fieldInput}
-                  placeholder="Paste Firebase UID"
-                  placeholderTextColor="#64748b"
-                  value={form.id}
-                  onChangeText={(t) => setForm({ ...form, id: t })}
-                />
-              </View>
-            )}
-
             <View style={styles.field}>
               <Text style={styles.fieldLabel}>Employee Code *</Text>
               <TextInput
@@ -202,7 +197,7 @@ export default function AdminEmployeesScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={styles.fieldLabel}>Email</Text>
+              <Text style={styles.fieldLabel}>Email {!editingEmp && "*"}</Text>
               <TextInput
                 style={styles.fieldInput}
                 placeholder="john@company.com"
@@ -210,8 +205,32 @@ export default function AdminEmployeesScreen() {
                 value={form.email}
                 onChangeText={(t) => setForm({ ...form, email: t })}
                 keyboardType="email-address"
+                autoCapitalize="none"
+                editable={!editingEmp}
               />
+              {!!editingEmp && (
+                <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>
+                  Login email can't be changed here.
+                </Text>
+              )}
             </View>
+
+            {!editingEmp && (
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>Password *</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  placeholder="At least 6 characters"
+                  placeholderTextColor="#64748b"
+                  value={form.password}
+                  onChangeText={(t) => setForm({ ...form, password: t })}
+                  secureTextEntry
+                />
+                <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>
+                  This creates the employee's login — share it with them directly.
+                </Text>
+              </View>
+            )}
 
             <View style={styles.field}>
               <Text style={styles.fieldLabel}>Phone</Text>
@@ -226,11 +245,11 @@ export default function AdminEmployeesScreen() {
             </View>
 
             <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowModal(false)}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowModal(false)} disabled={saving}>
                 <Text style={{ color: colors.textSecondary, fontWeight: "500" }}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-                <Text style={{ color: "white", fontWeight: "600" }}>Save</Text>
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={saving}>
+                <Text style={{ color: "white", fontWeight: "600" }}>{saving ? "Saving..." : "Save"}</Text>
               </TouchableOpacity>
             </View>
           </View>

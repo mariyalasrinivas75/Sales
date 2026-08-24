@@ -13,3 +13,6 @@ export const supabaseConfig = {
   url: import.meta.env.VITE_SUPABASE_URL || "https://YOUR_PROJECT.supabase.co",
   anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || "YOUR_ANON_KEY",
 };
+
+// VAPID public key for Web Push subscriptions (iOS PWA reminders)
+export const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";

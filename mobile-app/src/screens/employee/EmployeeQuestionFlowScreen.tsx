@@ -41,6 +41,7 @@ export default function EmployeeQuestionFlowScreen() {
   const [allDone, setAllDone] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [micStatus, setMicStatus] = useState("");
   const date = todayIST();
 
   const getDeadline = useCallback(
@@ -93,24 +94,43 @@ export default function EmployeeQuestionFlowScreen() {
   }, [employee, date]);
 
   useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => () => Speech.stop(), []);
 
   const handleMicPress = useCallback(async () => {
     if (isListening) return;
     setIsListening(true);
+    setMicStatus("");
+    Vibration.vibrate(15);
     try {
-      const transcript = await listenOnce();
+      const transcript = await listenOnce((partial) => setMicStatus(partial));
       const num = parseSpokenNumber(transcript);
-      if (num !== null) setInputValue(String(num));
+      if (num !== null) {
+        setInputValue(String(num));
+        setMicStatus("");
+      } else {
+        setMicStatus(transcript ? `Heard "${transcript}" — couldn't find a number. Try again or use the keypad.` : "Didn't catch a number. Try again or use the keypad.");
+      }
     } catch (err) {
+      const reason = err instanceof Error ? err.message : "";
+      setMicStatus(
+        reason === "timeout" || reason === "no-speech"
+          ? "Didn't hear anything. Try again or use the keypad."
+          : reason === "Microphone permission denied"
+          ? "Microphone permission denied — enable it in Settings, or use the keypad."
+          : "Couldn't hear that. Try again or use the keypad."
+      );
       console.warn("[STT] Failed:", err);
     } finally {
       setIsListening(false);
     }
   }, [isListening]);
 
-  // Speak question when it changes, then auto-start listening (no button tap needed)
+  // Speak question when it changes, then auto-start listening (no button tap needed).
+  // expo-speech queues calls by default — stop() first so a leftover/earlier
+  // utterance never plays ahead of the current question.
   const speakQuestion = useCallback((q: Question) => {
     const prompt = phase === "plan" ? `How many ${q.label} today?` : `How many ${q.label} did you achieve?`;
+    Speech.stop();
     setIsSpeaking(true);
     Speech.speak(prompt, {
       language: "en-IN",
@@ -124,6 +144,7 @@ export default function EmployeeQuestionFlowScreen() {
   }, [phase, handleMicPress]);
 
   useEffect(() => {
+    setMicStatus("");
     if (questions.length > 0 && currentIndex < questions.length && !allDone && !isLocked) {
       speakQuestion(questions[currentIndex]);
     }
@@ -141,6 +162,14 @@ export default function EmployeeQuestionFlowScreen() {
     if (!employee || !questions[currentIndex]) return;
     const value = parseInt(inputValue, 10);
     if (isNaN(value) || value < 0) return;
+
+    // Re-check the deadline at write time — loadData only checked it on mount,
+    // so a submit made while the app stayed open past the deadline would
+    // otherwise still go through.
+    if (isPastDeadline(getDeadline(phase))) {
+      setIsLocked(true);
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -293,6 +322,10 @@ export default function EmployeeQuestionFlowScreen() {
           )}
         </View>
 
+        {!!micStatus && (
+          <Text style={styles.micStatusText}>{micStatus}</Text>
+        )}
+
         {/* Keypad — always available, voice is optional */}
         <View style={styles.keypad}>
           {["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "del"].map((key) => (
@@ -376,6 +409,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   speakBtnText: { fontSize: 13, color: colors.textSecondary },
+  micStatusText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    textAlign: "center",
+    marginTop: -8,
+    marginBottom: 16,
+  },
   keypad: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 },
   keypadBtn: {
     width: "30%",

@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from "react-native";
+import { NativeModules, Platform, PermissionsAndroid } from "react-native";
 import { isSundayIST } from "./utils";
 
 /**
@@ -16,6 +16,8 @@ interface SalesAlarmModuleType {
   ): Promise<string>;
   cancelAlarm(slotKey: string): Promise<string>;
   cancelAllAlarms(): Promise<string>;
+  canScheduleExactAlarms(): Promise<boolean>;
+  openExactAlarmSettings(): Promise<boolean>;
 }
 
 const { SalesAlarmModule } = NativeModules as {
@@ -131,5 +133,42 @@ export async function cancelAlarm(slotKey: string): Promise<void> {
     await SalesAlarmModule.cancelAlarm(slotKey);
   } catch (err) {
     console.warn(`[Alarms] Failed to cancel ${slotKey}:`, err);
+  }
+}
+
+/**
+ * Whether the OS will currently let us schedule exact alarms + show notifications.
+ * Both require an explicit runtime grant on Android 12+ / 13+ — without them,
+ * scheduleAlarm() silently throws and the reminder never fires.
+ */
+export async function hasAlarmPermissions(): Promise<boolean> {
+  if (!isAlarmModuleAvailable || !SalesAlarmModule) return true; // nothing to check off-Android
+
+  const exactAlarmOk = await SalesAlarmModule.canScheduleExactAlarms().catch(() => false);
+
+  let notificationsOk = true;
+  if (Platform.OS === "android" && Platform.Version >= 33) {
+    notificationsOk =
+      (await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS)) ?? false;
+  }
+
+  return exactAlarmOk && notificationsOk;
+}
+
+/**
+ * Ask for both permissions the alarm feature needs. POST_NOTIFICATIONS uses the
+ * standard OS dialog; SCHEDULE_EXACT_ALARM has no dialog and must be granted from
+ * Settings, so this opens that screen for the user.
+ */
+export async function requestAlarmPermissions(): Promise<void> {
+  if (!isAlarmModuleAvailable || !SalesAlarmModule) return;
+
+  if (Platform.OS === "android" && Platform.Version >= 33) {
+    await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS).catch(() => {});
+  }
+
+  const exactAlarmOk = await SalesAlarmModule.canScheduleExactAlarms().catch(() => true);
+  if (!exactAlarmOk) {
+    await SalesAlarmModule.openExactAlarmSettings().catch(() => {});
   }
 }

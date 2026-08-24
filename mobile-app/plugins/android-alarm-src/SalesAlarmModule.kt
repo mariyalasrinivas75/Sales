@@ -93,6 +93,33 @@ class SalesAlarmModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /** SCHEDULE_EXACT_ALARM has no standard permission dialog — check + deep-link to Settings instead. */
+    @ReactMethod
+    fun canScheduleExactAlarms(promise: Promise) {
+        val allowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (reactContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
+        } else {
+            true
+        }
+        promise.resolve(allowed)
+    }
+
+    @ReactMethod
+    fun openExactAlarmSettings(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val intent = Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                    data = android.net.Uri.parse("package:${reactContext.packageName}")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                reactContext.startActivity(intent)
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SETTINGS_ERROR", e.message, e)
+        }
+    }
+
     @ReactMethod
     fun scheduleAlarm(slotKey: String, hour: Int, minute: Int, title: String, body: String, promise: Promise) {
         try {

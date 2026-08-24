@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { onAuthChange, signIn, signOut, type User } from "./firebase";
 import { getUserRole, getEmployeeProfile, getNotificationConfig, type Employee, type UserRole } from "./supabase";
-import { scheduleAllAlarms, cancelAllAlarms } from "./alarms";
+import { scheduleAllAlarms, cancelAllAlarms, hasAlarmPermissions, requestAlarmPermissions } from "./alarms";
 
 interface AuthContextType {
   user: User | null;
@@ -9,6 +9,8 @@ interface AuthContextType {
   role: UserRole | null;
   loading: boolean;
   error: string | null;
+  alarmPermissionsOk: boolean;
+  grantAlarmPermissions: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -21,6 +23,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<UserRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [alarmPermissionsOk, setAlarmPermissionsOk] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthChange(async (firebaseUser) => {
@@ -37,6 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             try {
               const config = await getNotificationConfig();
               await scheduleAllAlarms(config);
+              setAlarmPermissionsOk(await hasAlarmPermissions());
             } catch {
               console.warn("[Auth] Failed to schedule alarms");
             }
@@ -79,8 +83,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRole(null);
   };
 
+  const grantAlarmPermissions = async () => {
+    await requestAlarmPermissions();
+    const config = await getNotificationConfig();
+    await scheduleAllAlarms(config);
+    setAlarmPermissionsOk(await hasAlarmPermissions());
+  };
+
   return (
-    <AuthContext.Provider value={{ user, employee, role, loading, error, login, logout }}>
+    <AuthContext.Provider
+      value={{ user, employee, role, loading, error, alarmPermissionsOk, grantAlarmPermissions, login, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );

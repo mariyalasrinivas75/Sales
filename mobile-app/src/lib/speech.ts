@@ -18,11 +18,18 @@ try {
 /** Only available on Android/iOS with a dev-client or production build. */
 export const isSTTAvailable = !!SpeechRecognitionModule;
 
+const LISTEN_TIMEOUT_MS = 8000;
+
 /**
  * Listens for a single final speech result and resolves with the transcript.
- * Rejects on permission denial, recognizer error, or no speech detected.
+ * Rejects on permission denial, recognizer error, no speech detected, or timeout
+ * (some Android OEM recognizers never fire "end" if the mic hangs — the hard
+ * timeout is the safety net for that).
+ *
+ * onPartial, if given, is called with live interim transcript as the user speaks,
+ * so the UI can show "hearing you" feedback instead of a dead "Listening..." label.
  */
-export function listenOnce(): Promise<string> {
+export function listenOnce(onPartial?: (text: string) => void): Promise<string> {
   if (!SpeechRecognitionModule) {
     return Promise.reject(new Error("Speech recognition not available"));
   }
@@ -36,15 +43,24 @@ export function listenOnce(): Promise<string> {
       const finish = (fn: () => void) => {
         if (done) return;
         done = true;
+        clearTimeout(timer);
         resultSub.remove();
         errorSub.remove();
         endSub.remove();
         fn();
       };
 
+      const timer = setTimeout(() => {
+        module.abort();
+        finish(() => reject(new Error("timeout")));
+      }, LISTEN_TIMEOUT_MS);
+
       const resultSub = module.addListener("result", (event) => {
+        const transcript = event.results?.[0]?.transcript ?? "";
         if (event.isFinal) {
-          finish(() => resolve(event.results?.[0]?.transcript ?? ""));
+          finish(() => resolve(transcript));
+        } else {
+          onPartial?.(transcript);
         }
       });
       const errorSub = module.addListener("error", (event) => {
@@ -54,7 +70,7 @@ export function listenOnce(): Promise<string> {
         finish(() => reject(new Error("no-speech")));
       });
 
-      module.start({ lang: "en-IN", interimResults: false, continuous: false });
+      module.start({ lang: "en-IN", interimResults: true, continuous: false });
     });
   });
 }
