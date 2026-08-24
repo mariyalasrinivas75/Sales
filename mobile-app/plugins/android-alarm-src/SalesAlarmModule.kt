@@ -120,6 +120,32 @@ class SalesAlarmModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Standard AOSP battery-optimization exemption. Doesn't help on OEMs (Vivo, Xiaomi,
+     * Oppo) that run their own separate background-app killer on top of stock Android —
+     * those need a manual whitelist in the OEM's own settings, no API for it — but it's
+     * the one thing app code can legitimately request, and some OEMs partially honor it.
+     */
+    @ReactMethod
+    fun isIgnoringBatteryOptimizations(promise: Promise) {
+        val pm = reactContext.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        promise.resolve(pm.isIgnoringBatteryOptimizations(reactContext.packageName))
+    }
+
+    @ReactMethod
+    fun requestIgnoreBatteryOptimizations(promise: Promise) {
+        try {
+            val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = android.net.Uri.parse("package:${reactContext.packageName}")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            reactContext.startActivity(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SETTINGS_ERROR", e.message, e)
+        }
+    }
+
     @ReactMethod
     fun scheduleAlarm(slotKey: String, hour: Int, minute: Int, title: String, body: String, promise: Promise) {
         try {

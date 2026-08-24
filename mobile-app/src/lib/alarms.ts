@@ -18,6 +18,8 @@ interface SalesAlarmModuleType {
   cancelAllAlarms(): Promise<string>;
   canScheduleExactAlarms(): Promise<boolean>;
   openExactAlarmSettings(): Promise<boolean>;
+  isIgnoringBatteryOptimizations(): Promise<boolean>;
+  requestIgnoreBatteryOptimizations(): Promise<boolean>;
 }
 
 const { SalesAlarmModule } = NativeModules as {
@@ -145,6 +147,7 @@ export async function hasAlarmPermissions(): Promise<boolean> {
   if (!isAlarmModuleAvailable || !SalesAlarmModule) return true; // nothing to check off-Android
 
   const exactAlarmOk = await SalesAlarmModule.canScheduleExactAlarms().catch(() => false);
+  const batteryOk = await SalesAlarmModule.isIgnoringBatteryOptimizations().catch(() => true);
 
   let notificationsOk = true;
   if (Platform.OS === "android" && Platform.Version >= 33) {
@@ -152,7 +155,7 @@ export async function hasAlarmPermissions(): Promise<boolean> {
       (await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS)) ?? false;
   }
 
-  return exactAlarmOk && notificationsOk;
+  return exactAlarmOk && notificationsOk && batteryOk;
 }
 
 /**
@@ -170,5 +173,10 @@ export async function requestAlarmPermissions(): Promise<void> {
   const exactAlarmOk = await SalesAlarmModule.canScheduleExactAlarms().catch(() => true);
   if (!exactAlarmOk) {
     await SalesAlarmModule.openExactAlarmSettings().catch(() => {});
+  }
+
+  const batteryOk = await SalesAlarmModule.isIgnoringBatteryOptimizations().catch(() => true);
+  if (!batteryOk) {
+    await SalesAlarmModule.requestIgnoreBatteryOptimizations().catch(() => {});
   }
 }

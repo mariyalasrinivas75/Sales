@@ -147,7 +147,10 @@ function OnboardingGate({ onDone }: { onDone: () => void }) {
       <Text style={styles.errorTitle}>Enable Reminders</Text>
       <Text style={styles.errorText}>
         Sales Tracker uses alarms and notifications to remind you about your daily plan and
-        achievement deadlines. Allow them now so reminders work from day one.
+        achievement deadlines. Allow them now so reminders work from day one.{"\n\n"}
+        On some phones (Vivo, Xiaomi, Oppo, Realme, OnePlus) you'll also need to manually
+        allow "Autostart" / disable battery optimization for this app in your phone's own
+        Settings — Android's own permission alone isn't enough on those brands.
       </Text>
       <TouchableOpacity style={styles.signOutBtn} onPress={handleContinue} disabled={requesting}>
         <Text style={styles.signOutBtnText}>{requesting ? "Requesting..." : "Continue"}</Text>
