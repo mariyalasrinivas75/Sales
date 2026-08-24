@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Vibration,
+  AppState,
 } from "react-native";
 import * as Speech from "expo-speech";
 import { Ionicons } from "@expo/vector-icons";
@@ -101,6 +102,19 @@ export default function EmployeeQuestionFlowScreen() {
   }, [employee, date]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Re-run loadData (and its alarm re-arm) when the app comes back to the
+  // foreground, not just on first mount — React Navigation keeps this screen
+  // mounted across background/foreground cycles, so the mount effect alone
+  // misses config changes made while the app was merely backgrounded, not killed.
+  const loadDataRef = useRef(loadData);
+  loadDataRef.current = loadData;
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") loadDataRef.current();
+    });
+    return () => sub.remove();
+  }, []);
   useEffect(() => () => Speech.stop(), []);
 
   const handleMicPress = useCallback(async () => {
