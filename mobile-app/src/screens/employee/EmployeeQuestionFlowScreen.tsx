@@ -10,6 +10,7 @@ import {
 import * as Speech from "expo-speech";
 import { Ionicons } from "@expo/vector-icons";
 import { isSTTAvailable, listenOnce } from "../../lib/speech";
+import { scheduleAllAlarms } from "../../lib/alarms";
 import { useAuth } from "../../lib/auth";
 import { colors } from "../../lib/theme";
 import {
@@ -66,6 +67,12 @@ export default function EmployeeQuestionFlowScreen() {
       setQuestions(qs);
       setAnswers(ans);
       setNotifConfig(config);
+
+      // Re-arm native alarms with the latest config every time this screen loads.
+      // setExactAndAllowWhileIdle is one-shot — nothing else re-reads config and
+      // re-schedules unless the app cold-starts, so an admin's time change (or a
+      // reminder that already fired and was consumed) would otherwise go stale.
+      scheduleAllAlarms(config).catch(() => {});
 
       if (status?.is_leave) { setIsLocked(true); setLoading(false); return; }
 

@@ -1,12 +1,16 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity } from "react-native";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AuthProvider, useAuth } from "./src/lib/auth";
+import { requestAlarmPermissions } from "./src/lib/alarms";
 import { colors } from "./src/lib/theme";
+
+const ONBOARDING_KEY = "@sales_tracker/permissions_onboarded";
 
 // Screens
 import LoginScreen from "./src/screens/LoginScreen";
@@ -64,11 +68,15 @@ function AdminTabs() {
 // ── Employee Tab Navigator ──
 function EmployeeTabs() {
   const { employee, logout, alarmPermissionsOk, grantAlarmPermissions } = useAuth();
+  const insets = useSafeAreaInsets();
 
   return (
     <View style={{ flex: 1 }}>
       {!alarmPermissionsOk && (
-        <TouchableOpacity style={styles.permissionBanner} onPress={grantAlarmPermissions}>
+        <TouchableOpacity
+          style={[styles.permissionBanner, { paddingTop: insets.top + 10 }]}
+          onPress={grantAlarmPermissions}
+        >
           <Ionicons name="alarm-outline" size={16} color="white" />
           <Text style={styles.permissionBannerText}>
             Reminders are off — tap to allow alarms & notifications
@@ -116,17 +124,58 @@ function EmployeeTabs() {
   );
 }
 
+// ── First-run permission gate ──
+// Runs once per install, before the Login screen is reachable — the user must
+// tap through the prompt (grant, or hit the OS deny) to unlock login.
+function OnboardingGate({ onDone }: { onDone: () => void }) {
+  const insets = useSafeAreaInsets();
+  const [requesting, setRequesting] = useState(false);
+
+  const handleContinue = async () => {
+    setRequesting(true);
+    try {
+      await requestAlarmPermissions();
+    } finally {
+      await AsyncStorage.setItem(ONBOARDING_KEY, "1");
+      onDone();
+    }
+  };
+
+  return (
+    <View style={[styles.center, { paddingTop: insets.top + 32 }]}>
+      <Ionicons name="alarm-outline" size={48} color={colors.accent} style={{ marginBottom: 16 }} />
+      <Text style={styles.errorTitle}>Enable Reminders</Text>
+      <Text style={styles.errorText}>
+        Sales Tracker uses alarms and notifications to remind you about your daily plan and
+        achievement deadlines. Allow them now so reminders work from day one.
+      </Text>
+      <TouchableOpacity style={styles.signOutBtn} onPress={handleContinue} disabled={requesting}>
+        <Text style={styles.signOutBtnText}>{requesting ? "Requesting..." : "Continue"}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 // ── App Shell ──
 function AppContent() {
   const { user, role, loading, logout } = useAuth();
+  const [onboarded, setOnboarded] = useState<boolean | null>(null);
 
-  if (loading) {
+  useEffect(() => {
+    AsyncStorage.getItem(ONBOARDING_KEY).then((v) => setOnboarded(v === "1"));
+  }, []);
+
+  if (onboarded === null || loading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={colors.accent} />
         <Text style={styles.loadingText}>Loading...</Text>
       </View>
     );
+  }
+
+  if (!onboarded) {
+    return <OnboardingGate onDone={() => setOnboarded(true)} />;
   }
 
   if (!user) {
