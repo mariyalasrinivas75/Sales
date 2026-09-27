@@ -32,10 +32,19 @@ class SalesAlarmModule(private val reactContext: ReactApplicationContext) :
     companion object {
         const val ACTION_ALARM = "com.yourcompany.salestracker.ALARM_TRIGGER"
         const val PREFS_NAME = "sales_alarms"
+        // pm_final is admin-only (PLAN.md) — never scheduled/synced on employee phones.
+        // Kept out of SLOT_KEYS; cancelAllAlarms() still clears it below for old installs.
         val SLOT_KEYS = listOf(
             "am_reminder_1", "am_reminder_2", "am_deadline",
-            "pm_reminder_1", "pm_reminder_2", "pm_deadline", "pm_final"
+            "pm_reminder_1", "pm_reminder_2", "pm_deadline"
         )
+        private const val LEGACY_SLOT_KEYS = "pm_final"
+        const val KEY_SYNC_URL = "sync_url"
+        const val KEY_SYNC_ANON_KEY = "sync_key"
+        const val KEY_DAY_DATE = "day_date"
+        const val KEY_DAY_PLAN_DONE = "day_plan_done"
+        const val KEY_DAY_ACH_DONE = "day_ach_done"
+        const val KEY_DAY_ON_LEAVE = "day_on_leave"
 
         private fun getPendingIntent(context: Context, slotKey: String, title: String, body: String): PendingIntent {
             val intent = Intent(context, AlarmReceiver::class.java).apply {
@@ -74,7 +83,8 @@ class SalesAlarmModule(private val reactContext: ReactApplicationContext) :
             }
         }
 
-        private fun persist(context: Context, slotKey: String, hour: Int, minute: Int, title: String, body: String) {
+        /** Not private: AlarmReceiver persists the new time after a background config sync. */
+        fun persist(context: Context, slotKey: String, hour: Int, minute: Int, title: String, body: String) {
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putInt("${slotKey}_hour", hour)
                 .putInt("${slotKey}_minute", minute)
@@ -174,7 +184,7 @@ class SalesAlarmModule(private val reactContext: ReactApplicationContext) :
     fun cancelAllAlarms(promise: Promise) {
         try {
             val alarmManager = reactContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            for (key in SLOT_KEYS) {
+            for (key in SLOT_KEYS + LEGACY_SLOT_KEYS) {
                 val pi = getPendingIntent(reactContext, key, "", "")
                 alarmManager.cancel(pi)
                 pi.cancel()
@@ -183,6 +193,36 @@ class SalesAlarmModule(private val reactContext: ReactApplicationContext) :
             promise.resolve("All alarms cancelled")
         } catch (e: Exception) {
             promise.reject("CANCEL_ALL_ERROR", e.message, e)
+        }
+    }
+
+    /** JS passes the Supabase URL + anon key once so AlarmReceiver can sync config with no app open. */
+    @ReactMethod
+    fun setSyncConfig(url: String, anonKey: String, promise: Promise) {
+        try {
+            reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putString(KEY_SYNC_URL, url.trimEnd('/'))
+                .putString(KEY_SYNC_ANON_KEY, anonKey)
+                .apply()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SYNC_CONFIG_ERROR", e.message, e)
+        }
+    }
+
+    /** Smart skip: today's plan/achievement/leave state, so AlarmReceiver can skip already-done slots. */
+    @ReactMethod
+    fun setDayState(date: String, planDone: Boolean, achDone: Boolean, onLeave: Boolean, promise: Promise) {
+        try {
+            reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putString(KEY_DAY_DATE, date)
+                .putBoolean(KEY_DAY_PLAN_DONE, planDone)
+                .putBoolean(KEY_DAY_ACH_DONE, achDone)
+                .putBoolean(KEY_DAY_ON_LEAVE, onLeave)
+                .apply()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("DAY_STATE_ERROR", e.message, e)
         }
     }
 }

@@ -7,11 +7,12 @@ import {
   ActivityIndicator,
   Vibration,
   AppState,
+  ScrollView,
 } from "react-native";
 import * as Speech from "expo-speech";
 import { Ionicons } from "@expo/vector-icons";
 import { isSTTAvailable, listenOnce } from "../../lib/speech";
-import { scheduleAllAlarms } from "../../lib/alarms";
+import { scheduleAllAlarms, setDayState } from "../../lib/alarms";
 import { useAuth } from "../../lib/auth";
 import { colors } from "../../lib/theme";
 import {
@@ -24,23 +25,25 @@ import {
   type Question,
   type DailyAnswer,
   type NotificationConfig,
+  type DailyStatus,
 } from "../../lib/supabase";
-import { parseSpokenNumber, isPastDeadline, todayIST, currentISTTime } from "../../lib/utils";
+import { parseSpokenNumber, isPastDeadline, todayIST, currentISTTime, getTodayState } from "../../lib/utils";
 
 type Phase = "plan" | "ach";
+type Mode = "summary" | Phase;
 
 export default function EmployeeQuestionFlowScreen() {
   const { employee } = useAuth();
   const [questions, setQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<DailyAnswer[]>([]);
   const [notifConfig, setNotifConfig] = useState<NotificationConfig[]>([]);
+  const [status, setStatus] = useState<DailyStatus | null>(null);
+  const [mode, setMode] = useState<Mode>("summary");
+  const [flowKind, setFlowKind] = useState<"phase" | "edit">("phase");
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [phase, setPhase] = useState<Phase>("plan");
   const [inputValue, setInputValue] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [isLocked, setIsLocked] = useState(false);
-  const [allDone, setAllDone] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [micStatus, setMicStatus] = useState("");
@@ -58,7 +61,7 @@ export default function EmployeeQuestionFlowScreen() {
   const loadData = useCallback(async () => {
     if (!employee) return;
     try {
-      const [qs, ans, config, status] = await Promise.all([
+      const [qs, ans, config, st] = await Promise.all([
         getActiveQuestions(),
         getTodaysAnswers(employee.id, date),
         getNotificationConfig(),
@@ -68,6 +71,7 @@ export default function EmployeeQuestionFlowScreen() {
       setQuestions(qs);
       setAnswers(ans);
       setNotifConfig(config);
+      setStatus(st);
 
       // Re-arm native alarms with the latest config every time this screen loads.
       // setExactAndAllowWhileIdle is one-shot — nothing else re-reads config and
@@ -75,25 +79,8 @@ export default function EmployeeQuestionFlowScreen() {
       // reminder that already fired and was consumed) would otherwise go stale.
       scheduleAllAlarms(config).catch(() => {});
 
-      if (status?.is_leave) { setIsLocked(true); setLoading(false); return; }
-
-      const planDeadline = config.find((c) => c.slot_key === "am_deadline")?.fire_time || "09:30:00";
-      const planAnswers = ans.filter((a) => a.phase === "plan");
-      const achAnswers = ans.filter((a) => a.phase === "ach");
-
-      if (achAnswers.length >= qs.length) {
-        setAllDone(true);
-      } else if (planAnswers.length >= qs.length || isPastDeadline(planDeadline)) {
-        setPhase("ach");
-        const answeredIds = new Set(achAnswers.map((a) => a.question_id));
-        const first = qs.findIndex((q) => !answeredIds.has(q.id));
-        setCurrentIndex(first >= 0 ? first : 0);
-      } else {
-        setPhase("plan");
-        const answeredIds = new Set(planAnswers.map((a) => a.question_id));
-        const first = qs.findIndex((q) => !answeredIds.has(q.id));
-        setCurrentIndex(first >= 0 ? first : 0);
-      }
+      const ts = getTodayState({ questions: qs, answers: ans, status: st, config, now: new Date() });
+      setDayState(date, ts.plan === "done", ts.ach === "done", ts.onLeave).catch(() => {});
     } catch (err) {
       console.error("Failed to load:", err);
     } finally {
@@ -107,6 +94,8 @@ export default function EmployeeQuestionFlowScreen() {
   // foreground, not just on first mount — React Navigation keeps this screen
   // mounted across background/foreground cycles, so the mount effect alone
   // misses config changes made while the app was merely backgrounded, not killed.
+  // This only refreshes data; it never touches `mode`/`currentIndex`, so it can
+  // never re-trigger speech or jump the user out of an in-progress flow.
   const loadDataRef = useRef(loadData);
   loadDataRef.current = loadData;
   useEffect(() => {
@@ -115,7 +104,16 @@ export default function EmployeeQuestionFlowScreen() {
     });
     return () => sub.remove();
   }, []);
-  useEffect(() => () => Speech.stop(), []);
+
+  // Leaving flow mode (back to summary) always stops any in-flight speech.
+  useEffect(() => {
+    if (mode === "summary") Speech.stop();
+  }, [mode]);
+  useEffect(() => () => { Speech.stop(); }, []);
+  // Flow index out of range (e.g. questions changed) → fall back to summary.
+  useEffect(() => {
+    if (mode !== "summary" && !loading && !questions[currentIndex]) setMode("summary");
+  }, [mode, loading, questions, currentIndex]);
 
   const handleMicPress = useCallback(async () => {
     if (isListening) return;
@@ -149,8 +147,8 @@ export default function EmployeeQuestionFlowScreen() {
   // Speak question when it changes, then auto-start listening (no button tap needed).
   // expo-speech queues calls by default — stop() first so a leftover/earlier
   // utterance never plays ahead of the current question.
-  const speakQuestion = useCallback((q: Question) => {
-    const prompt = phase === "plan" ? `How many ${q.label} today?` : `How many ${q.label} did you achieve?`;
+  const speakQuestion = useCallback((p: Phase, q: Question) => {
+    const prompt = p === "plan" ? `How many ${q.label} today?` : `How many ${q.label} did you achieve?`;
     Speech.stop();
     setIsSpeaking(true);
     Speech.speak(prompt, {
@@ -162,15 +160,52 @@ export default function EmployeeQuestionFlowScreen() {
       },
       onError: () => setIsSpeaking(false),
     });
-  }, [phase, handleMicPress]);
+  }, [handleMicPress]);
 
+  // Keyed on mode + currentIndex only — never on `questions` identity — so a
+  // background/foreground reload (which replaces the `questions` array) never
+  // re-triggers speech or the mic. Speech+auto-mic only ever run in flow mode.
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
   useEffect(() => {
     setMicStatus("");
-    if (questions.length > 0 && currentIndex < questions.length && !allDone && !isLocked) {
-      speakQuestion(questions[currentIndex]);
+    if (mode === "summary") return;
+    const qs = questionsRef.current;
+    if (qs.length > 0 && currentIndex < qs.length) {
+      speakQuestion(mode, qs[currentIndex]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, questions, allDone, isLocked]);
+  }, [mode, currentIndex]);
+
+  const firstUnansweredIndex = (p: Phase, ans: DailyAnswer[], qs: Question[]) => {
+    const answeredIds = new Set(ans.filter((a) => a.phase === p).map((a) => a.question_id));
+    const idx = qs.findIndex((q) => !answeredIds.has(q.id));
+    return idx >= 0 ? idx : 0;
+  };
+
+  const startPhase = useCallback(async (p: Phase) => {
+    if (!employee) return;
+    const startedKey = p === "plan" ? "plan_started_at" : "ach_started_at";
+    if (!status?.[startedKey]) {
+      const updates = { [startedKey]: new Date().toISOString() } as Partial<DailyStatus>;
+      updateDailyStatus(employee.id, date, updates).catch(() => {});
+      setStatus((s) => ({ ...(s ?? {}), ...updates } as DailyStatus));
+    }
+    setFlowKind("phase");
+    setCurrentIndex(firstUnansweredIndex(p, answers, questions));
+    setInputValue("");
+    setMode(p);
+  }, [employee, status, answers, questions, date]);
+
+  const startEdit = useCallback((p: Phase, idx: number) => {
+    const q = questions[idx];
+    if (!q) return;
+    const existing = answers.find((a) => a.phase === p && a.question_id === q.id);
+    setFlowKind("edit");
+    setCurrentIndex(idx);
+    setInputValue(existing ? String(existing.value) : "");
+    setMode(p);
+  }, [questions, answers]);
 
   const handleKeypadPress = (key: string) => {
     Vibration.vibrate(10);
@@ -180,41 +215,62 @@ export default function EmployeeQuestionFlowScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!employee || !questions[currentIndex]) return;
+    if (mode === "summary" || !employee || !questions[currentIndex]) return;
+    const p = mode as Phase;
     const value = parseInt(inputValue, 10);
     if (isNaN(value) || value < 0) return;
 
     // Re-check the deadline at write time — loadData only checked it on mount,
     // so a submit made while the app stayed open past the deadline would
     // otherwise still go through.
-    if (isPastDeadline(getDeadline(phase))) {
-      setIsLocked(true);
+    if (isPastDeadline(getDeadline(p))) {
+      await loadData();
+      setMode("summary");
       return;
     }
 
     setSubmitting(true);
     try {
       const q = questions[currentIndex];
-      await submitAnswer(employee.id, q.id, date, phase, value, "typed");
+      await submitAnswer(employee.id, q.id, date, p, value, "typed");
 
-      const statusUpdate: Record<string, string> = {};
-      if (phase === "plan" && currentIndex === 0) statusUpdate.plan_started_at = new Date().toISOString();
-      if (phase === "plan" && currentIndex === questions.length - 1) statusUpdate.plan_completed_at = new Date().toISOString();
-      if (phase === "ach" && currentIndex === 0) statusUpdate.ach_started_at = new Date().toISOString();
-      if (phase === "ach" && currentIndex === questions.length - 1) statusUpdate.ach_completed_at = new Date().toISOString();
-      if (Object.keys(statusUpdate).length > 0) {
-        await updateDailyStatus(employee.id, date, statusUpdate);
+      const nextAnswers: DailyAnswer[] = [
+        ...answers.filter((a) => !(a.phase === p && a.question_id === q.id)),
+        {
+          id: `${q.id}-${p}`,
+          employee_id: employee.id,
+          question_id: q.id,
+          answer_date: date,
+          phase: p,
+          value,
+          input_method: "typed",
+          answered_at: new Date().toISOString(),
+        },
+      ];
+      setAnswers(nextAnswers);
+
+      // Completion is based on every active question id having an answer —
+      // not merely "we're on the last index" — so a question added mid-flow
+      // or an out-of-order edit doesn't falsely mark the phase complete/incomplete.
+      const activeIds = new Set(questions.map((qq) => qq.id));
+      const answeredIds = new Set(
+        nextAnswers.filter((a) => a.phase === p && activeIds.has(a.question_id)).map((a) => a.question_id)
+      );
+      const allAnswered = [...activeIds].every((id) => answeredIds.has(id));
+      const completedKey = p === "plan" ? "plan_completed_at" : "ach_completed_at";
+
+      if (allAnswered && !status?.[completedKey]) {
+        const updates = { [completedKey]: new Date().toISOString() } as Partial<DailyStatus>;
+        await updateDailyStatus(employee.id, date, updates);
+        setStatus((s) => ({ ...(s ?? {}), ...updates } as DailyStatus));
       }
 
-      if (currentIndex < questions.length - 1) {
+      if (flowKind === "edit" || allAnswered || currentIndex >= questions.length - 1) {
+        await loadData();
+        setMode("summary");
+      } else {
         setCurrentIndex(currentIndex + 1);
         setInputValue("");
-      } else {
-        if (phase === "plan") {
-          setAllDone(true); // Plan done, wait for evening
-        } else {
-          setAllDone(true); // All done
-        }
       }
     } catch (err) {
       console.error("Submit failed:", err);
@@ -232,55 +288,107 @@ export default function EmployeeQuestionFlowScreen() {
     );
   }
 
-  if (isLocked) {
-    return (
-      <View style={styles.center}>
-        <Ionicons name="lock-closed-outline" size={48} color={colors.textMuted} />
-        <Text style={styles.centerTitle}>Time's Up</Text>
-        <Text style={styles.centerText}>
-          The {phase === "plan" ? "morning plan" : "evening achievement"} deadline has passed.
-        </Text>
-      </View>
-    );
-  }
+  const todayState = getTodayState({ questions, answers, status, config: notifConfig, now: new Date() });
 
-  if (allDone) {
-    const achDone = answers.filter((a) => a.phase === "ach").length >= questions.length;
+  if (mode === "summary") {
+    const planLabel =
+      todayState.plan === "done" ? "Goal submitted ✓" : todayState.plan === "missed" ? "Deadline passed" : "Tap to start";
+    const achLabel =
+      todayState.ach === "locked"
+        ? "Complete goal first"
+        : todayState.ach === "waiting"
+        ? `Unlocks at ${todayState.achUnlockAt}`
+        : todayState.ach === "done"
+        ? "Done ✓"
+        : todayState.ach === "missed"
+        ? "Deadline passed"
+        : "Tap to start";
+    const planDisabled = todayState.onLeave || todayState.plan !== "open";
+    const achDisabled = todayState.onLeave || todayState.ach !== "open";
+    // Answers stay editable until that phase's deadline, even after the phase is submitted.
+    const canEdit = (p: Phase) => {
+      const st = p === "plan" ? todayState.plan : todayState.ach;
+      return !todayState.onLeave && (st === "open" || (st === "done" && !isPastDeadline(getDeadline(p))));
+    };
+
     return (
-      <View style={styles.center}>
-        <Ionicons
-          name={achDone ? "trophy-outline" : "checkmark-circle-outline"}
-          size={48}
-          color={achDone ? colors.warning : colors.success}
-        />
-        <Text style={styles.centerTitle}>
-          {achDone ? "All Done for Today!" : "Plan Submitted!"}
+      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 32 }}>
+        <Text style={styles.summaryDate}>
+          {new Date(date).toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "long" })}
         </Text>
-        <Text style={styles.centerText}>
-          {achDone
-            ? "Great work! Your plan and achievements have been recorded."
-            : "Come back in the evening to fill your achievements."}
-        </Text>
-        {!achDone && (
-          <TouchableOpacity
-            style={styles.primaryBtn}
-            onPress={() => {
-              setPhase("ach");
-              setCurrentIndex(0);
-              setInputValue("");
-              setAllDone(false);
-            }}
-          >
-            <Text style={styles.primaryBtnText}>Fill Achievement Now</Text>
-          </TouchableOpacity>
+
+        {todayState.onLeave && (
+          <View style={styles.leaveBanner}>
+            <Ionicons name="airplane-outline" size={16} color={colors.warning} />
+            <Text style={styles.leaveBannerText}>You're marked on leave today</Text>
+          </View>
         )}
-      </View>
+
+        <TouchableOpacity
+          style={[styles.summaryBtn, planDisabled && styles.summaryBtnDisabled]}
+          onPress={() => startPhase("plan")}
+          disabled={planDisabled}
+        >
+          <Ionicons name="sunny-outline" size={22} color={colors.accentLight} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.summaryBtnTitle}>Start Goal</Text>
+            <Text style={styles.summaryBtnState}>{planLabel}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.summaryBtn, achDisabled && styles.summaryBtnDisabled]}
+          onPress={() => startPhase("ach")}
+          disabled={achDisabled}
+        >
+          <Ionicons name="trophy-outline" size={22} color={colors.accentLight} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.summaryBtnTitle}>Start Achievements</Text>
+            <Text style={styles.summaryBtnState}>{achLabel}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+        </TouchableOpacity>
+
+        <Text style={styles.tableHeading}>Today's questions</Text>
+        <View style={styles.table}>
+          <View style={[styles.tableRow, styles.tableHeaderRow]}>
+            <Text style={[styles.tableCell, styles.tableHeaderCell, { flex: 2 }]}>Label</Text>
+            <Text style={[styles.tableCell, styles.tableHeaderCell]}>Plan</Text>
+            <Text style={[styles.tableCell, styles.tableHeaderCell]}>Ach</Text>
+          </View>
+          {questions.map((q, idx) => {
+            const planAns = answers.find((a) => a.phase === "plan" && a.question_id === q.id);
+            const achAns = answers.find((a) => a.phase === "ach" && a.question_id === q.id);
+            return (
+              <View key={q.id} style={styles.tableRow}>
+                <Text style={[styles.tableCell, { flex: 2 }]} numberOfLines={1}>{q.label}</Text>
+                <TouchableOpacity
+                  style={styles.tableCellTouch}
+                  disabled={!canEdit("plan")}
+                  onPress={() => startEdit("plan", idx)}
+                >
+                  <Text style={styles.tableCellValue}>{planAns ? planAns.value : "—"}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.tableCellTouch}
+                  disabled={!canEdit("ach")}
+                  onPress={() => startEdit("ach", idx)}
+                >
+                  <Text style={styles.tableCellValue}>{achAns ? achAns.value : "—"}</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </View>
+      </ScrollView>
     );
   }
 
   const currentQuestion = questions[currentIndex];
   if (!currentQuestion) return null;
 
+  const phase = mode as Phase;
   const deadline = getDeadline(phase);
   const questionPrompt = phase === "plan"
     ? `How many ${currentQuestion.label} today?`
@@ -296,6 +404,13 @@ export default function EmployeeQuestionFlowScreen() {
 
       {/* Header */}
       <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backRow}
+          onPress={() => { Speech.stop(); setMode("summary"); }}
+        >
+          <Ionicons name="arrow-back" size={16} color={colors.textSecondary} />
+          <Text style={styles.backText}>Back</Text>
+        </TouchableOpacity>
         <View style={styles.badgeRow}>
           <Ionicons name={phase === "plan" ? "sunny-outline" : "moon-outline"} size={14} color={colors.accentLight} />
           <Text style={styles.phaseBadge}>{phase === "plan" ? "Morning Plan" : "Evening Achievement"}</Text>
@@ -320,7 +435,7 @@ export default function EmployeeQuestionFlowScreen() {
         <View style={styles.voiceRow}>
           <TouchableOpacity
             style={styles.speakBtn}
-            onPress={() => speakQuestion(currentQuestion)}
+            onPress={() => speakQuestion(phase, currentQuestion)}
             disabled={isSpeaking}
           >
             <Ionicons name="volume-high-outline" size={14} color={colors.textSecondary} />
@@ -383,11 +498,12 @@ export default function EmployeeQuestionFlowScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, padding: 16 },
   center: { flex: 1, backgroundColor: colors.background, justifyContent: "center", alignItems: "center", padding: 32 },
-  centerTitle: { fontSize: 22, fontWeight: "700", color: colors.textPrimary, marginTop: 12 },
   centerText: { fontSize: 14, color: colors.textSecondary, textAlign: "center", marginTop: 8, lineHeight: 22 },
   progressTrack: { height: 4, backgroundColor: "rgba(255,255,255,0.06)", borderRadius: 2, marginBottom: 12, overflow: "hidden" },
   progressFill: { height: "100%", backgroundColor: colors.accent, borderRadius: 2 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap" },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 },
+  backRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  backText: { fontSize: 13, color: colors.textSecondary },
   badgeRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   phaseBadge: { fontSize: 14, fontWeight: "600", color: colors.accentLight },
   timeBadge: { fontSize: 11, color: colors.textMuted },
@@ -455,6 +571,48 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   submitBtnText: { color: "white", fontSize: 16, fontWeight: "600" },
-  primaryBtn: { backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 14, paddingHorizontal: 32, marginTop: 20 },
-  primaryBtnText: { color: "white", fontWeight: "600", fontSize: 15 },
+  summaryDate: { fontSize: 18, fontWeight: "700", color: colors.textPrimary, marginBottom: 16 },
+  leaveBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "rgba(245, 158, 11, 0.1)",
+    borderWidth: 1,
+    borderColor: colors.warning,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+  },
+  leaveBannerText: { color: colors.warning, fontSize: 13, fontWeight: "600" },
+  summaryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "rgba(30, 41, 59, 0.6)",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12,
+  },
+  summaryBtnDisabled: { opacity: 0.5 },
+  summaryBtnTitle: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
+  summaryBtnState: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  tableHeading: { fontSize: 13, fontWeight: "600", color: colors.textMuted, marginTop: 12, marginBottom: 8 },
+  table: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  tableRow: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  tableHeaderRow: { backgroundColor: "rgba(255,255,255,0.04)" },
+  tableCell: { flex: 1, padding: 10, fontSize: 13, color: colors.textPrimary },
+  tableHeaderCell: { fontWeight: "700", color: colors.textMuted, fontSize: 11 },
+  tableCellTouch: { flex: 1, padding: 10, alignItems: "flex-start" },
+  tableCellValue: { fontSize: 13, color: colors.textPrimary, fontWeight: "600" },
 });

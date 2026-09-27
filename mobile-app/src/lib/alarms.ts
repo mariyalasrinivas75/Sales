@@ -1,5 +1,5 @@
 import { NativeModules, Platform, PermissionsAndroid } from "react-native";
-import { isSundayIST } from "./utils";
+import { supabaseConfig } from "./config";
 
 /**
  * JavaScript bridge to the native Android AlarmManager module.
@@ -20,6 +20,13 @@ interface SalesAlarmModuleType {
   openExactAlarmSettings(): Promise<boolean>;
   isIgnoringBatteryOptimizations(): Promise<boolean>;
   requestIgnoreBatteryOptimizations(): Promise<boolean>;
+  setSyncConfig(url: string, anonKey: string): Promise<boolean>;
+  setDayState(
+    date: string,
+    planDone: boolean,
+    achDone: boolean,
+    onLeave: boolean
+  ): Promise<boolean>;
 }
 
 const { SalesAlarmModule } = NativeModules as {
@@ -37,6 +44,17 @@ export interface NotificationSlot {
   fire_time: string; // "HH:MM:SS"
   label: string | null;
 }
+
+// pm_final is admin-only (PLAN.md) — never scheduled on employee phones. Mirrors
+// SalesAlarmModule.SLOT_KEYS on the native side.
+const KNOWN_SLOT_KEYS = [
+  "am_reminder_1",
+  "am_reminder_2",
+  "am_deadline",
+  "pm_reminder_1",
+  "pm_reminder_2",
+  "pm_deadline",
+];
 
 function getMessageForSlot(slotKey: string): { title: string; body: string } {
   const messages: Record<string, { title: string; body: string }> = {
@@ -85,14 +103,19 @@ export async function scheduleAllAlarms(slots: NotificationSlot[]): Promise<void
     console.log("[Alarms] Native module not available. Skipping alarm scheduling.");
     return;
   }
+  // Sunday skip is handled natively (scheduleAlarmDirectly pushes to Monday) —
+  // no early return here, otherwise the app would never re-arm/sync on Sundays.
 
-  if (isSundayIST()) {
-    console.log("[Alarms] Sunday — no reminders scheduled.");
-    return;
+  try {
+    await SalesAlarmModule.setSyncConfig(supabaseConfig.url, supabaseConfig.anonKey);
+  } catch (err) {
+    console.warn("[Alarms] Failed to set sync config:", err);
   }
 
+  const active = slots.filter((s) => s.slot_key !== "pm_final");
+
   const results = await Promise.allSettled(
-    slots.map((slot) => {
+    active.map((slot) => {
       const [hourStr, minuteStr] = slot.fire_time.split(":");
       const hour = parseInt(hourStr, 10);
       const minute = parseInt(minuteStr, 10);
@@ -104,11 +127,22 @@ export async function scheduleAllAlarms(slots: NotificationSlot[]): Promise<void
 
   results.forEach((result, i) => {
     if (result.status === "rejected") {
-      console.warn(`[Alarms] Failed to schedule ${slots[i]?.slot_key}:`, result.reason);
+      console.warn(`[Alarms] Failed to schedule ${active[i]?.slot_key}:`, result.reason);
     } else {
-      console.log(`[Alarms] ✅ ${slots[i]?.slot_key}: ${result.value}`);
+      console.log(`[Alarms] ✅ ${active[i]?.slot_key}: ${result.value}`);
     }
   });
+
+  // Cancel any slot the admin removed from config entirely (missing from `slots`).
+  // Guarded on active.length so a transient empty fetch can't wipe every alarm.
+  if (active.length > 0) {
+    const configuredKeys = new Set(active.map((s) => s.slot_key));
+    for (const key of KNOWN_SLOT_KEYS) {
+      if (!configuredKeys.has(key)) {
+        await cancelAlarm(key);
+      }
+    }
+  }
 }
 
 /**
@@ -139,12 +173,13 @@ export async function cancelAlarm(slotKey: string): Promise<void> {
 }
 
 /**
- * Whether the OS will currently let us schedule exact alarms + show notifications.
- * Both require an explicit runtime grant on Android 12+ / 13+ — without them,
- * scheduleAlarm() silently throws and the reminder never fires.
+ * alarmOk = exact-alarm scheduling AND POST_NOTIFICATIONS are both granted — a hard
+ * requirement, since without them scheduleAlarm() silently throws and nothing fires.
+ * batteryOk = ignoring battery optimization — reported to admin, no longer a hard
+ * gate (some OEMs don't offer the exemption at all, which would be a permanent lockout).
  */
-export async function hasAlarmPermissions(): Promise<boolean> {
-  if (!isAlarmModuleAvailable || !SalesAlarmModule) return true; // nothing to check off-Android
+export async function getAlarmPermissionState(): Promise<{ alarmOk: boolean; batteryOk: boolean }> {
+  if (!isAlarmModuleAvailable || !SalesAlarmModule) return { alarmOk: true, batteryOk: true }; // nothing to check off-Android
 
   const exactAlarmOk = await SalesAlarmModule.canScheduleExactAlarms().catch(() => false);
   const batteryOk = await SalesAlarmModule.isIgnoringBatteryOptimizations().catch(() => true);
@@ -155,7 +190,30 @@ export async function hasAlarmPermissions(): Promise<boolean> {
       (await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS)) ?? false;
   }
 
-  return exactAlarmOk && notificationsOk && batteryOk;
+  return { alarmOk: exactAlarmOk && notificationsOk, batteryOk };
+}
+
+/** Alarm-only view of getAlarmPermissionState(), kept for existing callers. */
+export async function hasAlarmPermissions(): Promise<boolean> {
+  return (await getAlarmPermissionState()).alarmOk;
+}
+
+/**
+ * Smart skip (Phase 4): persist today's plan/achievement/leave state natively so
+ * AlarmReceiver can skip ringing slots that are no longer needed. No-op off Android.
+ */
+export async function setDayState(
+  date: string,
+  planDone: boolean,
+  achDone: boolean,
+  onLeave: boolean
+): Promise<void> {
+  if (!isAlarmModuleAvailable || !SalesAlarmModule) return;
+  try {
+    await SalesAlarmModule.setDayState(date, planDone, achDone, onLeave);
+  } catch (err) {
+    console.warn("[Alarms] Failed to set day state:", err);
+  }
 }
 
 /**

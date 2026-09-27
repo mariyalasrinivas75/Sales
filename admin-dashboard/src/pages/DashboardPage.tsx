@@ -4,6 +4,7 @@ import {
   getQuestions,
   getDailyAnswers,
   getDailyStatuses,
+  getNotificationConfig,
   type Employee,
   type Question,
 } from "../lib/supabase";
@@ -16,6 +17,10 @@ import {
   Download,
   Palmtree,
   XCircle,
+  BellOff,
+  BellRing,
+  BatteryWarning,
+  WifiOff,
 } from "lucide-react";
 
 // Today's date in YYYY-MM-DD format (IST)
@@ -23,83 +28,117 @@ function todayIST(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
+// Current time-of-day in IST as "HH:MM:SS", comparable against fire_time strings.
+function nowISTTime(): string {
+  return new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour12: false });
+}
+
+const ACH_UNLOCK_DELAY_MIN = 120;
+
+type TodayStatus = "not_started" | "goal_done" | "waiting_ach" | "ach_done" | "missed" | "on_leave";
+
 interface EmployeeStatus {
   employee: Employee;
-  status: "not_started" | "plan_done" | "pending_eod" | "completed" | "defaulted" | "on_leave";
+  status: TodayStatus;
   planTotal: number;
   achTotal: number;
 }
+
+type AlarmBadge = "on" | "off" | "battery_restricted" | "not_seen";
+
+function alarmBadgeFor(emp: Employee): AlarmBadge {
+  const checkedAt = emp.alarm_checked_at;
+  const seenRecently = !!checkedAt && Date.now() - new Date(checkedAt).getTime() < 24 * 60 * 60 * 1000;
+  if (!seenRecently) return "not_seen";
+  if (emp.alarm_ok && emp.battery_ok === false) return "battery_restricted";
+  if (emp.alarm_ok) return "on";
+  return "off";
+}
+
+const alarmBadgeConfig: Record<AlarmBadge, { label: string; badge: string; icon: React.ReactNode }> = {
+  on: { label: "Alarms ON", badge: "badge-success", icon: <BellRing size={14} /> },
+  off: { label: "Alarms OFF", badge: "badge-danger", icon: <BellOff size={14} /> },
+  battery_restricted: { label: "Battery restricted", badge: "badge-warning", icon: <BatteryWarning size={14} /> },
+  not_seen: { label: "Not seen 24h+", badge: "badge-muted", icon: <WifiOff size={14} /> },
+};
 
 export default function DashboardPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [statuses, setStatuses] = useState<EmployeeStatus[]>([]);
+  const [defaulters, setDefaulters] = useState<{ employee: Employee; reason: "Missed Goal" | "Missed Ach" }[]>([]);
   const [loading, setLoading] = useState(true);
   const [date] = useState(todayIST());
 
   const loadData = useCallback(async () => {
     try {
-      const [emps, qs, answers, dailyStatuses] = await Promise.all([
+      const [emps, qs, answers, dailyStatuses, config] = await Promise.all([
         getEmployees(),
         getQuestions(true),
         getDailyAnswers(date),
         getDailyStatuses(date),
+        getNotificationConfig(),
       ]);
 
       setEmployees(emps);
       setQuestions(qs);
 
-      const statusList: EmployeeStatus[] = emps
-        .filter((e) => e.active)
-        .map((emp) => {
-          const dailyStatus = dailyStatuses.find(
-            (s: Record<string, unknown>) => s.employee_id === emp.id
-          );
-          const empAnswers = answers.filter(
-            (a: Record<string, unknown>) => a.employee_id === emp.id
-          );
+      const amDeadline = config.find((c) => c.slot_key === "am_deadline")?.fire_time;
+      const pmDeadline = config.find((c) => c.slot_key === "pm_deadline")?.fire_time;
+      const now = nowISTTime();
+      const amPassed = !!amDeadline && now >= amDeadline;
+      const pmPassed = !!pmDeadline && now >= pmDeadline;
 
-          if (dailyStatus && (dailyStatus as Record<string, unknown>).is_leave) {
-            return { employee: emp, status: "on_leave" as const, planTotal: 0, achTotal: 0 };
-          }
+      const activeEmps = emps.filter((e) => e.active);
+      const defaulterList: { employee: Employee; reason: "Missed Goal" | "Missed Ach" }[] = [];
 
-          const planAnswers = empAnswers.filter((a: Record<string, unknown>) => a.phase === "plan");
-          const achAnswers = empAnswers.filter((a: Record<string, unknown>) => a.phase === "ach");
-          const planTotal = planAnswers.reduce((sum: number, a: Record<string, unknown>) => sum + (a.value as number), 0);
-          const achTotal = achAnswers.reduce((sum: number, a: Record<string, unknown>) => sum + (a.value as number), 0);
+      const statusList: EmployeeStatus[] = activeEmps.map((emp) => {
+        const dailyStatus = dailyStatuses.find(
+          (s: Record<string, unknown>) => s.employee_id === emp.id
+        ) as Record<string, unknown> | undefined;
+        const empAnswers = answers.filter(
+          (a: Record<string, unknown>) => a.employee_id === emp.id
+        );
 
-          // "Completed" means every active question was answered in both
-          // phases — having at least one answer in each phase is not enough
-          // (a partial submission before the deadline was previously read as
-          // "completed").
-          const planComplete = qs.length > 0 && planAnswers.length >= qs.length;
-          const achComplete = qs.length > 0 && achAnswers.length >= qs.length;
+        const planTotal = empAnswers
+          .filter((a: Record<string, unknown>) => a.phase === "plan")
+          .reduce((sum: number, a: Record<string, unknown>) => sum + (a.value as number), 0);
+        const achTotal = empAnswers
+          .filter((a: Record<string, unknown>) => a.phase === "ach")
+          .reduce((sum: number, a: Record<string, unknown>) => sum + (a.value as number), 0);
 
-          let status: EmployeeStatus["status"] = "not_started";
-          if (planComplete && achComplete) {
-            status = "completed";
-          } else if (planAnswers.length > 0 || achAnswers.length > 0) {
-            const now = new Date();
-            const hour = now.getHours();
-            if (hour >= 17) {
-              status = "pending_eod";
-            } else {
-              status = "plan_done";
-            }
+        if (dailyStatus?.is_leave) {
+          return { employee: emp, status: "on_leave" as const, planTotal, achTotal };
+        }
+
+        const planCompletedAt = dailyStatus?.plan_completed_at as string | null | undefined;
+        const achCompletedAt = dailyStatus?.ach_completed_at as string | null | undefined;
+
+        let status: TodayStatus;
+        if (!planCompletedAt) {
+          if (amPassed) {
+            status = "missed";
+            defaulterList.push({ employee: emp, reason: "Missed Goal" });
           } else {
-            // Check if any were auto-zeroed
-            const hasAutoZero = empAnswers.some(
-              (a: Record<string, unknown>) => a.input_method === "auto_zero"
-            );
-            if (hasAutoZero) {
-              status = "defaulted";
-            }
+            status = "not_started";
           }
+        } else if (!achCompletedAt) {
+          if (pmPassed) {
+            status = "missed";
+            defaulterList.push({ employee: emp, reason: "Missed Ach" });
+          } else {
+            const unlockAt = new Date(planCompletedAt).getTime() + ACH_UNLOCK_DELAY_MIN * 60000;
+            status = Date.now() < unlockAt ? "goal_done" : "waiting_ach";
+          }
+        } else {
+          status = "ach_done";
+        }
 
-          return { employee: emp, status, planTotal, achTotal };
-        });
+        return { employee: emp, status, planTotal, achTotal };
+      });
 
       setStatuses(statusList);
+      setDefaulters(defaulterList);
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
     } finally {
@@ -116,12 +155,12 @@ export default function DashboardPage() {
 
   const stats = {
     total: statuses.length,
-    completed: statuses.filter((s) => s.status === "completed").length,
+    completed: statuses.filter((s) => s.status === "ach_done").length,
     pending: statuses.filter((s) =>
-      ["not_started", "plan_done", "pending_eod"].includes(s.status)
+      ["not_started", "goal_done", "waiting_ach"].includes(s.status)
     ).length,
     onLeave: statuses.filter((s) => s.status === "on_leave").length,
-    defaulted: statuses.filter((s) => s.status === "defaulted").length,
+    defaulted: statuses.filter((s) => s.status === "missed").length,
   };
 
   const handleExport = async () => {
@@ -134,7 +173,7 @@ export default function DashboardPage() {
   };
 
   const statusConfig: Record<
-    EmployeeStatus["status"],
+    TodayStatus,
     { label: string; badge: string; icon: React.ReactNode }
   > = {
     not_started: {
@@ -142,23 +181,23 @@ export default function DashboardPage() {
       badge: "badge-muted",
       icon: <XCircle size={14} />,
     },
-    plan_done: {
-      label: "Plan Done",
+    goal_done: {
+      label: "Goal Done",
       badge: "badge-info",
       icon: <Clock size={14} />,
     },
-    pending_eod: {
-      label: "Pending EOD",
+    waiting_ach: {
+      label: "Waiting Ach",
       badge: "badge-warning",
-      icon: <AlertTriangle size={14} />,
+      icon: <Clock size={14} />,
     },
-    completed: {
-      label: "Completed",
+    ach_done: {
+      label: "Ach Done",
       badge: "badge-success",
       icon: <CheckCircle size={14} />,
     },
-    defaulted: {
-      label: "Defaulted (0)",
+    missed: {
+      label: "Missed",
       badge: "badge-danger",
       icon: <AlertTriangle size={14} />,
     },
@@ -226,6 +265,26 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Defaulters Today */}
+      {defaulters.length > 0 && (
+        <div className="card" style={{ marginBottom: "1.5rem" }}>
+          <div className="card-header">
+            <div>
+              <div className="card-title">Defaulters Today</div>
+              <div className="card-subtitle">Deadline passed with no submission (excludes leave)</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+            {defaulters.map((d) => (
+              <span key={d.employee.id + d.reason} className="badge badge-danger">
+                <AlertTriangle size={14} />
+                <span style={{ marginLeft: 4 }}>{d.employee.name} — {d.reason}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Employee Status Table */}
       <div className="card">
         <div className="card-header">
@@ -242,6 +301,7 @@ export default function DashboardPage() {
                 <th>Employee</th>
                 <th>Code</th>
                 <th>Status</th>
+                <th>Alarms</th>
                 <th>Plan Total</th>
                 <th>Achievement Total</th>
                 <th>Progress</th>
@@ -250,7 +310,7 @@ export default function DashboardPage() {
             <tbody>
               {statuses.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <div className="empty-state">
                       <Users size={32} />
                       <h3>No employees yet</h3>
@@ -261,6 +321,7 @@ export default function DashboardPage() {
               ) : (
                 statuses.map((s) => {
                   const cfg = statusConfig[s.status];
+                  const alarmCfg = alarmBadgeConfig[alarmBadgeFor(s.employee)];
                   const progress =
                     s.planTotal > 0
                       ? Math.min(100, Math.round((s.achTotal / s.planTotal) * 100))
@@ -275,6 +336,17 @@ export default function DashboardPage() {
                           {cfg.icon}
                           <span style={{ marginLeft: 4 }}>{cfg.label}</span>
                         </span>
+                      </td>
+                      <td>
+                        <span className={`badge ${alarmCfg.badge}`}>
+                          {alarmCfg.icon}
+                          <span style={{ marginLeft: 4 }}>{alarmCfg.label}</span>
+                        </span>
+                        {s.employee.platform && (
+                          <div style={{ fontSize: "0.6875rem", color: "var(--color-text-muted)", marginTop: 2 }}>
+                            {s.employee.platform}
+                          </div>
+                        )}
                       </td>
                       <td>{s.planTotal}</td>
                       <td>{s.achTotal}</td>

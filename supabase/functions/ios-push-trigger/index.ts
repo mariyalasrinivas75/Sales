@@ -36,9 +36,18 @@ Deno.serve(async (_req) => {
     const today = istDate.toISOString().split("T")[0];
     const currentHHMM = istDate.toISOString().slice(11, 16); // "HH:MM"
 
+    // pm_final is admin-only (PLAN.md) — never pushed to employee phones.
+    // Sunday is skipped entirely, same as the Android native path.
+    if (istDate.getUTCDay() === 0) {
+      return new Response(JSON.stringify({ success: true, matchedSlots: 0, reason: "sunday" }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const { data: allConfig } = await supabase.from("notification_config").select("*");
     const matchedSlots = (allConfig || []).filter(
-      (c: { fire_time: string }) => c.fire_time?.slice(0, 5) === currentHHMM
+      (c: { fire_time: string; slot_key: string }) =>
+        c.fire_time?.slice(0, 5) === currentHHMM && c.slot_key !== "pm_final"
     );
 
     if (matchedSlots.length === 0) {
@@ -48,13 +57,20 @@ Deno.serve(async (_req) => {
     }
 
     const { data: employees } = await supabase.from("employees").select("id").eq("active", true);
-    const { data: leaveStatuses } = await supabase
+    const { data: dailyStatuses } = await supabase
       .from("daily_status")
-      .select("employee_id")
-      .eq("status_date", today)
-      .eq("is_leave", true);
+      .select("employee_id, is_leave, plan_completed_at, ach_completed_at")
+      .eq("status_date", today);
 
-    const onLeaveIds = new Set((leaveStatuses || []).map((s: { employee_id: string }) => s.employee_id));
+    const onLeaveIds = new Set<string>();
+    const planDoneIds = new Set<string>();
+    const achDoneIds = new Set<string>();
+    for (const s of dailyStatuses || []) {
+      if (s.is_leave) onLeaveIds.add(s.employee_id);
+      if (s.plan_completed_at) planDoneIds.add(s.employee_id);
+      if (s.ach_completed_at) achDoneIds.add(s.employee_id);
+    }
+
     const activeEmployeeIds = (employees || [])
       .map((e: { id: string }) => e.id)
       .filter((id: string) => !onLeaveIds.has(id));
@@ -70,6 +86,7 @@ Deno.serve(async (_req) => {
       const isDeadline = config.slot_key.includes("deadline");
       const isPM = config.slot_key.startsWith("pm_");
       const phase = isPM ? "achievement" : "plan";
+      const doneIds = isPM ? achDoneIds : planDoneIds;
 
       const payload = JSON.stringify({
         title: isDeadline ? `${isPM ? "Evening" : "Morning"} Deadline` : `Time for your daily ${phase}`,
@@ -81,6 +98,7 @@ Deno.serve(async (_req) => {
       let expired = 0;
 
       for (const sub of subscriptions || []) {
+        if (doneIds.has(sub.employee_id)) continue;
         try {
           await webpush.sendNotification(
             {

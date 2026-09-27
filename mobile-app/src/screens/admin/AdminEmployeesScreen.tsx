@@ -22,6 +22,15 @@ import { createEmployeeAccount } from "../../lib/firebase";
 import { todayIST } from "../../lib/utils";
 import { colors } from "../../lib/theme";
 
+function getAlarmBadge(emp: Employee): { label: string; color: string } {
+  if (!emp.alarm_checked_at) return { label: "Not seen 24h+", color: colors.textMuted };
+  const ageMs = Date.now() - new Date(emp.alarm_checked_at).getTime();
+  if (ageMs > 24 * 60 * 60 * 1000) return { label: "Not seen 24h+", color: colors.textMuted };
+  if (!emp.alarm_ok) return { label: "Alarms OFF", color: colors.danger };
+  if (emp.battery_ok === false) return { label: "Battery restricted", color: colors.warning };
+  return { label: "Alarms ON", color: colors.success };
+}
+
 export default function AdminEmployeesScreen() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -127,30 +136,36 @@ export default function AdminEmployeesScreen() {
     );
   };
 
-  const renderItem = ({ item }: { item: Employee }) => (
-    <View style={styles.card}>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.empName}>{item.name}</Text>
-        <Text style={styles.empMeta}>{item.emp_code} · {item.email || "No email"}</Text>
+  const renderItem = ({ item }: { item: Employee }) => {
+    const alarmBadge = getAlarmBadge(item);
+    return (
+      <View style={styles.card}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.empName}>{item.name}</Text>
+          <Text style={styles.empMeta}>{item.emp_code} · {item.email || "No email"}</Text>
+          <View style={[styles.badge, { backgroundColor: alarmBadge.color + "22", alignSelf: "flex-start", marginTop: 6 }]}>
+            <Text style={{ color: alarmBadge.color, fontSize: 11, fontWeight: "600" }}>{alarmBadge.label}</Text>
+          </View>
+        </View>
+        <View style={styles.actions}>
+          <TouchableOpacity
+            style={[styles.badge, { backgroundColor: item.active ? colors.success + "22" : colors.textMuted + "22" }]}
+            onPress={() => handleToggleActive(item)}
+          >
+            <Text style={{ color: item.active ? colors.success : colors.textMuted, fontSize: 11, fontWeight: "600" }}>
+              {item.active ? "Active" : "Inactive"}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => openEdit(item)}>
+            <Ionicons name="create-outline" size={16} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => handleLeave(item)}>
+            <Ionicons name="airplane-outline" size={16} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
       </View>
-      <View style={styles.actions}>
-        <TouchableOpacity
-          style={[styles.badge, { backgroundColor: item.active ? colors.success + "22" : colors.textMuted + "22" }]}
-          onPress={() => handleToggleActive(item)}
-        >
-          <Text style={{ color: item.active ? colors.success : colors.textMuted, fontSize: 11, fontWeight: "600" }}>
-            {item.active ? "Active" : "Inactive"}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => openEdit(item)}>
-          <Ionicons name="create-outline" size={16} color={colors.textSecondary} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => handleLeave(item)}>
-          <Ionicons name="airplane-outline" size={16} color={colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <View style={styles.container}>

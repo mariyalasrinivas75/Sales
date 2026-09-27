@@ -12,6 +12,11 @@ export interface Employee {
   phone: string | null;
   email: string | null;
   active: boolean;
+  // Added by migration 003_alarm_status.sql — optional so older rows/forms don't break.
+  alarm_ok?: boolean | null;
+  battery_ok?: boolean | null;
+  platform?: string | null;
+  alarm_checked_at?: string | null;
 }
 
 export interface Question {
@@ -170,6 +175,21 @@ export async function getNotificationConfig(): Promise<NotificationConfig[]> {
     .order("fire_time");
   if (error) throw error;
   return data;
+}
+
+// ── Alarm/reminder status (iOS PWA gate reports here) ──
+
+export async function reportAlarmStatus(employeeId: string, alarmOk: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("employees")
+    .update({
+      alarm_ok: alarmOk,
+      battery_ok: true,
+      platform: "ios-pwa",
+      alarm_checked_at: new Date().toISOString(),
+    })
+    .eq("id", employeeId);
+  if (error) throw error;
 }
 
 // ── History ──

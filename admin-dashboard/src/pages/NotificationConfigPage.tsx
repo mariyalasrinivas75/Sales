@@ -225,7 +225,7 @@ export default function NotificationConfigPage() {
             <li>Reminder times trigger buzzes on employee devices (Android alarm / iOS push notification)</li>
             <li>Deadline times enforce the auto-zero rule — unanswered entries become 0 permanently</li>
             <li>The "Final Compilation" time is admin-facing only — it triggers the system to compile all reports</li>
-            <li>Changes take effect the next day (already-scheduled buzzes for today won't change)</li>
+            <li>Phones pick up changes at the next alarm or when the app is opened</li>
             <li>Admin never receives any of these reminders or buzzes</li>
           </ul>
         </div>

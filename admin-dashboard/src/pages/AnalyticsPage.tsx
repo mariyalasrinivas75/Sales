@@ -31,6 +31,19 @@ function daysAgo(days: number): string {
   return d.toISOString().split("T")[0];
 }
 
+function startOfWeek(): string {
+  const d = new Date();
+  const day = d.getDay(); // 0 = Sun
+  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+  return d.toISOString().split("T")[0];
+}
+
+function startOfMonth(): string {
+  const d = new Date();
+  d.setDate(1);
+  return d.toISOString().split("T")[0];
+}
+
 export default function AnalyticsPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -74,11 +87,14 @@ export default function AnalyticsPage() {
         .filter((a) => a.phase === "ach")
         .reduce((sum, a) => sum + (a.value as number), 0);
 
+      const rate = planTotal > 0 ? Math.round((achTotal / planTotal) * 100) : 0;
+
       return {
         name: q.label,
         Plan: planTotal,
         Achievement: achTotal,
         gap: planTotal - achTotal,
+        rate,
       };
     });
 
@@ -115,8 +131,11 @@ export default function AnalyticsPage() {
         .filter((a) => a.phase === "ach")
         .reduce((sum, a) => sum + (a.value as number), 0);
       const rate = planTotal > 0 ? Math.round((achTotal / planTotal) * 100) : 0;
+      const defaultDays = new Set(
+        empAnswers.filter((a) => a.input_method === "auto_zero").map((a) => a.answer_date as string)
+      );
 
-      return { name: emp.name, Plan: planTotal, Achievement: achTotal, rate };
+      return { name: emp.name, Plan: planTotal, Achievement: achTotal, rate, defaults: defaultDays.size };
     })
     .sort((a, b) => b.Achievement - a.Achievement);
 
@@ -163,6 +182,12 @@ export default function AnalyticsPage() {
         </div>
 
         <div style={{ display: "flex", gap: "0.25rem", marginLeft: "auto" }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setStartDate(startOfWeek()); setEndDate(todayIST()); }}>
+            This Week
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setStartDate(startOfMonth()); setEndDate(todayIST()); }}>
+            This Month
+          </button>
           <button className="btn btn-ghost btn-sm" onClick={() => { setStartDate(daysAgo(7)); setEndDate(todayIST()); }}>
             7 Days
           </button>
@@ -296,6 +321,7 @@ export default function AnalyticsPage() {
                       <th>Total Achievement</th>
                       <th>Achievement Rate</th>
                       <th>Progress</th>
+                      <th>Defaulter Days</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -325,6 +351,50 @@ export default function AnalyticsPage() {
                               }}
                             />
                           </div>
+                        </td>
+                        <td>
+                          {emp.defaults > 0 ? (
+                            <span className="badge badge-danger">{emp.defaults}</span>
+                          ) : (
+                            <span style={{ color: "var(--color-text-muted)" }}>0</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Per-question rate table */}
+          {viewMode === "category" && (
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">Per-Question Achievement Rate</div>
+              </div>
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Question</th>
+                      <th>Total Plan</th>
+                      <th>Total Achievement</th>
+                      <th>Achievement Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categoryChartData.map((q, idx) => (
+                      <tr key={q.name}>
+                        <td style={{ fontWeight: 600 }}>{idx + 1}</td>
+                        <td style={{ fontWeight: 500 }}>{q.name}</td>
+                        <td>{q.Plan}</td>
+                        <td>{q.Achievement}</td>
+                        <td>
+                          <span className={`badge ${q.rate >= 80 ? "badge-success" : q.rate >= 50 ? "badge-warning" : "badge-danger"}`}>
+                            {q.rate}%
+                          </span>
                         </td>
                       </tr>
                     ))}

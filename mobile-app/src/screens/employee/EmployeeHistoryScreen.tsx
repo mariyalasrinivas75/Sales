@@ -13,7 +13,7 @@ export default function EmployeeHistoryScreen() {
   const load = async () => {
     if (!employee) return;
     try {
-      const data = await getEmployeeHistory(employee.id, 100);
+      const data = await getEmployeeHistory(employee.id, 1000);
       setAnswers(data);
     } catch (err) {
       console.error(err);
@@ -35,18 +35,28 @@ export default function EmployeeHistoryScreen() {
 
   const sortedDates = [...byDate.keys()].sort().reverse();
 
-  // Streak
+  // Streak: consecutive working days (Sundays skipped, neither break nor
+  // extend it) with a real (non auto_zero) achievement answer. Today is
+  // allowed to be empty without breaking the streak — the day isn't over yet.
   let streak = 0;
-  const today = new Date();
-  for (let i = 0; i < 60; i++) {
-    const d = new Date(today);
+  for (let i = 0; i < 90; i++) {
+    const d = new Date();
     d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().split("T")[0];
-    if (byDate.has(dateStr)) streak++;
-    else if (i > 0) break;
+    const dateStr = d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    const isSunday = d.toLocaleDateString("en-US", { timeZone: "Asia/Kolkata", weekday: "short" }) === "Sun";
+    if (isSunday) continue;
+    const hasAch = (byDate.get(dateStr) || []).some((a) => a.phase === "ach" && a.input_method !== "auto_zero");
+    if (hasAch) streak++;
+    else if (i === 0) continue;
+    else break;
   }
 
-  const todayStr = today.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  // Plan-vs-achievement % over the whole loaded history.
+  const totalPlan = answers.filter((a) => a.phase === "plan").reduce((s, a) => s + a.value, 0);
+  const totalAch = answers.filter((a) => a.phase === "ach").reduce((s, a) => s + a.value, 0);
+  const overallRate = totalPlan > 0 ? Math.round((totalAch / totalPlan) * 100) : 0;
+
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
   const todayAnswers = byDate.get(todayStr) || [];
   const todayPlan = todayAnswers.filter((a) => a.phase === "plan").reduce((s, a) => s + a.value, 0);
   const todayAch = todayAnswers.filter((a) => a.phase === "ach").reduce((s, a) => s + a.value, 0);
@@ -99,6 +109,10 @@ export default function EmployeeHistoryScreen() {
         <View style={styles.statBox}>
           <Text style={styles.statNum}>{todayAch}</Text>
           <Text style={styles.statLabel}>Ach</Text>
+        </View>
+        <View style={styles.statBox}>
+          <Text style={styles.statNum}>{overallRate}%</Text>
+          <Text style={styles.statLabel}>Plan vs Ach</Text>
         </View>
       </View>
 

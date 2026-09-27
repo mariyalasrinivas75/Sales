@@ -13,6 +13,10 @@ export interface Employee {
   email: string | null;
   active: boolean;
   created_at: string;
+  alarm_ok?: boolean | null;
+  battery_ok?: boolean | null;
+  alarm_checked_at?: string | null;
+  platform?: string | null;
 }
 
 export interface Admin {
@@ -263,4 +267,19 @@ export async function updateNotificationConfig(id: string, updates: Partial<Noti
   const { data, error } = await supabase.from("notification_config").update(updates).eq("id", id).select().single();
   if (error) throw error;
   return data as NotificationConfig;
+}
+
+// ── Alarm status reporting ──
+
+export async function reportAlarmStatus(employeeId: string, alarmOk: boolean, batteryOk: boolean): Promise<void> {
+  const { error } = await supabase
+    .from("employees")
+    .update({
+      alarm_ok: alarmOk,
+      battery_ok: batteryOk,
+      alarm_checked_at: new Date().toISOString(),
+      platform: "android",
+    })
+    .eq("id", employeeId);
+  if (error) throw error;
 }

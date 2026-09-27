@@ -508,7 +508,7 @@ body {
 
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 0.75rem;
   margin-bottom: 1.5rem;
 }
@@ -601,6 +601,91 @@ body {
   margin: 0 auto 1rem;
   opacity: 0.5;
 }
+
+/* ── iOS Gate ── */
+.gate-screen { max-width: 340px; margin: 0 auto; }
+
+.gate-steps {
+  text-align: left;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 2;
+  padding-left: 1.25rem;
+}
+
+.inline-icon { vertical-align: -2px; margin: 0 2px; }
+
+/* ── Today Summary ── */
+.summary-page { max-width: 480px; margin: 0 auto; }
+
+.summary-date {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  margin-bottom: 1rem;
+}
+
+.leave-banner {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: var(--color-info);
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+  text-align: center;
+}
+
+.summary-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.summary-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.25rem 0.75rem;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 1rem;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+
+.summary-btn:not(:disabled):hover { border-color: var(--color-brand-500); transform: translateY(-1px); }
+.summary-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.summary-btn.done { border-color: rgba(16, 185, 129, 0.35); }
+
+.summary-btn-label { font-weight: 700; font-size: 0.9375rem; }
+.summary-btn-state { font-size: 0.75rem; color: var(--color-text-muted); text-align: center; }
+
+.qa-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+
+.qa-table th {
+  text-align: left;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  padding: 0.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.qa-table td {
+  padding: 0.625rem 0.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.qa-table td.qa-editable {
+  color: var(--color-brand-400);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.qa-table td.qa-editable:hover { text-decoration: underline; }
 
 /* ── Safe Area for iOS ── */
 @supports (padding: env(safe-area-inset-top)) {

@@ -13,6 +13,11 @@ export interface Employee {
   email: string | null;
   active: boolean;
   created_at: string;
+  // Added by migration 003 — optional so older rows / forms without them still typecheck.
+  alarm_ok?: boolean | null;
+  battery_ok?: boolean | null;
+  alarm_checked_at?: string | null;
+  platform?: "android" | "ios-pwa" | null;
 }
 
 export interface Admin {

@@ -43,14 +43,18 @@ export default function HistoryPage() {
 
   const sortedDates = [...byDate.keys()].sort().reverse();
 
-  // Calculate streak
+  // Streak: consecutive working days (Sundays skipped, never break it) where at
+  // least one achievement was actually reported (not the nightly auto-zero fill).
   let streak = 0;
   const today = new Date();
   for (let i = 0; i < 60; i++) {
     const d = new Date(today);
     d.setDate(d.getDate() - i);
+    if (d.getDay() === 0) continue; // Sunday — skip, doesn't break the streak
     const dateStr = d.toISOString().split("T")[0];
-    if (byDate.has(dateStr)) {
+    const dayAnswers = byDate.get(dateStr) || [];
+    const counts = dayAnswers.some((a) => a.phase === "ach" && a.input_method !== "auto_zero");
+    if (counts) {
       streak++;
     } else if (i > 0) {
       break;
@@ -66,6 +70,11 @@ export default function HistoryPage() {
   const todayAch = todayAnswers
     .filter((a) => a.phase === "ach")
     .reduce((sum, a) => sum + a.value, 0);
+
+  // Plan-vs-achievement % across all loaded history (not just today).
+  const totalPlan = answers.filter((a) => a.phase === "plan").reduce((s, a) => s + a.value, 0);
+  const totalAch = answers.filter((a) => a.phase === "ach").reduce((s, a) => s + a.value, 0);
+  const overallRate = totalPlan > 0 ? Math.round((totalAch / totalPlan) * 100) : 0;
 
   return (
     <div className="history-page">
@@ -87,6 +96,10 @@ export default function HistoryPage() {
         <div className="stat-box">
           <div className="stat-number">{todayAch}</div>
           <div className="stat-text">Today's Ach</div>
+        </div>
+        <div className="stat-box">
+          <div className="stat-number">{overallRate}%</div>
+          <div className="stat-text">Plan vs Ach</div>
         </div>
       </div>
 

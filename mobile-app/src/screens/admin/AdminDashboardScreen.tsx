@@ -4,23 +4,53 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  TouchableOpacity,
   RefreshControl,
 } from "react-native";
 import {
   getEmployees,
   getDailyAnswers,
   getDailyStatuses,
+  getNotificationConfig,
   type Employee,
+  type NotificationConfig,
 } from "../../lib/supabase";
-import { todayIST } from "../../lib/utils";
+import { todayIST, isPastDeadline, ACH_UNLOCK_DELAY_MIN } from "../../lib/utils";
 import { colors } from "../../lib/theme";
+
+type TodayStatus = "Not started" | "Goal done" | "Waiting ach" | "Ach done" | "Missed" | "Leave";
 
 interface EmployeeStatus {
   employee: Employee;
-  status: string;
+  status: TodayStatus;
   planTotal: number;
   achTotal: number;
+}
+
+function computeTodayStatus(
+  ds: { is_leave?: boolean; plan_completed_at?: string | null; ach_completed_at?: string | null } | undefined,
+  _planCount: number,
+  _achCount: number,
+  config: NotificationConfig[]
+): TodayStatus {
+  if (ds?.is_leave) return "Leave";
+  const fireTime = (key: string) => config.find((c) => c.slot_key === key)?.fire_time;
+  const amDeadline = fireTime("am_deadline");
+  const pmDeadline = fireTime("pm_deadline");
+
+  if (ds?.ach_completed_at) return "Ach done";
+  if (!ds?.plan_completed_at) return amDeadline && isPastDeadline(amDeadline) ? "Missed" : "Not started";
+  if (pmDeadline && isPastDeadline(pmDeadline)) return "Missed";
+  const unlockMs = new Date(ds.plan_completed_at).getTime() + ACH_UNLOCK_DELAY_MIN * 60_000;
+  return Date.now() < unlockMs ? "Waiting ach" : "Goal done";
+}
+
+function getAlarmBadge(emp: Employee): { label: string; color: string } {
+  if (!emp.alarm_checked_at) return { label: "Not seen 24h+", color: colors.textMuted };
+  const ageMs = Date.now() - new Date(emp.alarm_checked_at).getTime();
+  if (ageMs > 24 * 60 * 60 * 1000) return { label: "Not seen 24h+", color: colors.textMuted };
+  if (!emp.alarm_ok) return { label: "Alarms OFF", color: colors.danger };
+  if (emp.battery_ok === false) return { label: "Battery restricted", color: colors.warning };
+  return { label: "Alarms ON", color: colors.success };
 }
 
 export default function AdminDashboardScreen() {
@@ -31,10 +61,11 @@ export default function AdminDashboardScreen() {
 
   const loadData = useCallback(async () => {
     try {
-      const [emps, answers, dailyStatuses] = await Promise.all([
+      const [emps, answers, dailyStatuses, config] = await Promise.all([
         getEmployees(),
         getDailyAnswers(date),
         getDailyStatuses(date),
+        getNotificationConfig(),
       ]);
 
       const statusList: EmployeeStatus[] = emps
@@ -42,20 +73,11 @@ export default function AdminDashboardScreen() {
         .map((emp) => {
           const ds = dailyStatuses.find((s: any) => s.employee_id === emp.id);
           const empAnswers = answers.filter((a: any) => a.employee_id === emp.id);
-
-          if (ds?.is_leave) {
-            return { employee: emp, status: "On Leave", planTotal: 0, achTotal: 0 };
-          }
-
           const planAnswers = empAnswers.filter((a: any) => a.phase === "plan");
           const achAnswers = empAnswers.filter((a: any) => a.phase === "ach");
           const planTotal = planAnswers.reduce((s: number, a: any) => s + a.value, 0);
           const achTotal = achAnswers.reduce((s: number, a: any) => s + a.value, 0);
-
-          let status = "Not Started";
-          if (planAnswers.length > 0 && achAnswers.length > 0) status = "Completed";
-          else if (planAnswers.length > 0) status = "Plan Done";
-          else if (empAnswers.some((a: any) => a.input_method === "auto_zero")) status = "Defaulted";
+          const status = computeTodayStatus(ds, planAnswers.length, achAnswers.length, config);
 
           return { employee: emp, status, planTotal, achTotal };
         });
@@ -77,22 +99,24 @@ export default function AdminDashboardScreen() {
 
   const stats = {
     total: statuses.length,
-    completed: statuses.filter((s) => s.status === "Completed").length,
-    pending: statuses.filter((s) => ["Not Started", "Plan Done"].includes(s.status)).length,
-    onLeave: statuses.filter((s) => s.status === "On Leave").length,
+    achDone: statuses.filter((s) => s.status === "Ach done").length,
+    missed: statuses.filter((s) => s.status === "Missed").length,
+    onLeave: statuses.filter((s) => s.status === "Leave").length,
   };
 
-  const statusColor: Record<string, string> = {
-    Completed: colors.success,
-    "Plan Done": colors.accentLight,
-    "Not Started": colors.textMuted,
-    Defaulted: colors.danger,
-    "On Leave": colors.textSecondary,
+  const defaulters = statuses.filter((s) => s.status === "Missed");
+
+  const statusColor: Record<TodayStatus, string> = {
+    "Ach done": colors.success,
+    "Goal done": colors.accentLight,
+    "Waiting ach": colors.warning,
+    "Not started": colors.textMuted,
+    Missed: colors.danger,
+    Leave: colors.textSecondary,
   };
 
   const renderItem = ({ item }: { item: EmployeeStatus }) => {
-    const progress = item.planTotal > 0 ? Math.min(100, Math.round((item.achTotal / item.planTotal) * 100)) : 0;
-
+    const alarmBadge = getAlarmBadge(item.employee);
     return (
       <View style={styles.card}>
         <View style={styles.cardRow}>
@@ -100,33 +124,16 @@ export default function AdminDashboardScreen() {
             <Text style={styles.empName}>{item.employee.name}</Text>
             <Text style={styles.empCode}>{item.employee.emp_code}</Text>
           </View>
-          <View style={[styles.badge, { backgroundColor: (statusColor[item.status] || "#64748b") + "22" }]}>
-            <Text style={[styles.badgeText, { color: statusColor[item.status] || "#64748b" }]}>
-              {item.status}
-            </Text>
+          <View style={[styles.badge, { backgroundColor: statusColor[item.status] + "22" }]}>
+            <Text style={[styles.badgeText, { color: statusColor[item.status] }]}>{item.status}</Text>
           </View>
         </View>
-
-        {item.status !== "On Leave" && (
-          <View style={styles.progressSection}>
-            <View style={styles.progressRow}>
-              <Text style={styles.progressLabel}>Plan: {item.planTotal}</Text>
-              <Text style={styles.progressLabel}>Ach: {item.achTotal}</Text>
-              <Text style={styles.progressPercent}>{progress}%</Text>
-            </View>
-            <View style={styles.progressBar}>
-              <View
-                style={[
-                  styles.progressFill,
-                  {
-                    width: `${progress}%`,
-                    backgroundColor: progress >= 80 ? colors.success : progress >= 50 ? colors.warning : colors.danger,
-                  },
-                ]}
-              />
-            </View>
+        <View style={styles.cardRow}>
+          <Text style={styles.progressLabel}>Plan: {item.planTotal} · Ach: {item.achTotal}</Text>
+          <View style={[styles.badge, { backgroundColor: alarmBadge.color + "22" }]}>
+            <Text style={[styles.badgeText, { color: alarmBadge.color }]}>{alarmBadge.label}</Text>
           </View>
-        )}
+        </View>
       </View>
     );
   };
@@ -140,18 +147,27 @@ export default function AdminDashboardScreen() {
           <Text style={styles.statLabel}>Active</Text>
         </View>
         <View style={[styles.statBox, { borderTopColor: colors.success }]}>
-          <Text style={styles.statValue}>{stats.completed}</Text>
-          <Text style={styles.statLabel}>Done</Text>
+          <Text style={styles.statValue}>{stats.achDone}</Text>
+          <Text style={styles.statLabel}>Ach Done</Text>
         </View>
-        <View style={[styles.statBox, { borderTopColor: colors.warning }]}>
-          <Text style={styles.statValue}>{stats.pending}</Text>
-          <Text style={styles.statLabel}>Pending</Text>
+        <View style={[styles.statBox, { borderTopColor: colors.danger }]}>
+          <Text style={styles.statValue}>{stats.missed}</Text>
+          <Text style={styles.statLabel}>Missed</Text>
         </View>
         <View style={[styles.statBox, { borderTopColor: colors.textSecondary }]}>
           <Text style={styles.statValue}>{stats.onLeave}</Text>
           <Text style={styles.statLabel}>Leave</Text>
         </View>
       </View>
+
+      {defaulters.length > 0 && (
+        <View style={styles.defaultersBox}>
+          <Text style={styles.defaultersTitle}>Defaulters today</Text>
+          <Text style={styles.defaultersText}>
+            {defaulters.map((d) => d.employee.name).join(", ")}
+          </Text>
+        </View>
+      )}
 
       {/* Employee List */}
       <FlatList
@@ -196,6 +212,16 @@ const styles = StyleSheet.create({
   },
   statValue: { fontSize: 22, fontWeight: "700", color: colors.textPrimary },
   statLabel: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  defaultersBox: {
+    backgroundColor: colors.danger + "18",
+    borderWidth: 1,
+    borderColor: colors.danger + "40",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  defaultersTitle: { fontSize: 13, fontWeight: "700", color: colors.danger, marginBottom: 4 },
+  defaultersText: { fontSize: 13, color: colors.textSecondary },
   card: {
     backgroundColor: colors.surface,
     borderRadius: 12,
@@ -203,18 +229,14 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     borderWidth: 1,
     borderColor: colors.border,
+    gap: 8,
   },
-  cardRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  cardRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   empName: { fontSize: 15, fontWeight: "600", color: colors.textPrimary },
   empCode: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 99 },
   badgeText: { fontSize: 12, fontWeight: "600" },
-  progressSection: { marginTop: 4 },
-  progressRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 4 },
   progressLabel: { fontSize: 12, color: colors.textSecondary },
-  progressPercent: { fontSize: 12, fontWeight: "700", color: colors.accentLight },
-  progressBar: { height: 4, backgroundColor: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" },
-  progressFill: { height: "100%", borderRadius: 2 },
   empty: { padding: 40, alignItems: "center" },
   emptyText: { color: colors.textMuted, textAlign: "center" },
 });
