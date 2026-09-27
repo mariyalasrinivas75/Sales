@@ -14,10 +14,10 @@ import {
   type Employee,
   type NotificationConfig,
 } from "../../lib/supabase";
-import { todayIST, isPastDeadline, ACH_UNLOCK_DELAY_MIN } from "../../lib/utils";
+import { todayIST, isPastDeadline } from "../../lib/utils";
 import { colors } from "../../lib/theme";
 
-type TodayStatus = "Not started" | "Goal done" | "Waiting ach" | "Ach done" | "Missed" | "Leave";
+type TodayStatus = "Not started" | "Goal done" | "Ach done" | "Missed" | "Leave";
 
 interface EmployeeStatus {
   employee: Employee;
@@ -40,8 +40,7 @@ function computeTodayStatus(
   if (ds?.ach_completed_at) return "Ach done";
   if (!ds?.plan_completed_at) return amDeadline && isPastDeadline(amDeadline) ? "Missed" : "Not started";
   if (pmDeadline && isPastDeadline(pmDeadline)) return "Missed";
-  const unlockMs = new Date(ds.plan_completed_at).getTime() + ACH_UNLOCK_DELAY_MIN * 60_000;
-  return Date.now() < unlockMs ? "Waiting ach" : "Goal done";
+  return "Goal done";
 }
 
 function getAlarmBadge(emp: Employee): { label: string; color: string } {
@@ -109,7 +108,6 @@ export default function AdminDashboardScreen() {
   const statusColor: Record<TodayStatus, string> = {
     "Ach done": colors.success,
     "Goal done": colors.accentLight,
-    "Waiting ach": colors.warning,
     "Not started": colors.textMuted,
     Missed: colors.danger,
     Leave: colors.textSecondary,

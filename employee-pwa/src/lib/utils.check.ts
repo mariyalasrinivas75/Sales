@@ -2,7 +2,7 @@
  * Self-check for getTodayState. Not part of the build; run manually with:
  *   npx tsc --module commonjs --outDir .check-out src/lib/utils.ts src/lib/utils.check.ts && node .check-out/utils.check.js
  */
-import { getTodayState, ACH_UNLOCK_DELAY_MIN } from "./utils";
+import { getTodayState } from "./utils";
 
 function assert(cond: boolean, msg: string) {
   if (!cond) throw new Error("FAIL: " + msg);
@@ -32,22 +32,16 @@ const config = { am_deadline: "09:30:00", pm_deadline: "17:30:00" };
   assert(s.ach === "locked", "ach locked all day when plan missed (strict, incl. partial)");
 }
 
-// plan done via all-answered (no explicit completed_at), ach waiting then open after unlock
+// plan done via all-answered (no explicit completed_at), ach open immediately
 {
   const planCompletedAt = "2026-09-27T03:00:00Z";
   const answers = [
     { question_id: "q1", phase: "plan" as const, answered_at: "2026-09-27T02:50:00Z" },
     { question_id: "q2", phase: "plan" as const, answered_at: planCompletedAt },
   ];
-  const justBeforeUnlock = new Date(new Date(planCompletedAt).getTime() + ACH_UNLOCK_DELAY_MIN * 60000 - 1000);
-  const s1 = getTodayState({ questions: Q, answers, status: null, config, now: justBeforeUnlock });
+  const s1 = getTodayState({ questions: Q, answers, status: null, config, now: new Date(planCompletedAt) });
   assert(s1.plan === "done", "plan done via all active answered, no completed_at needed");
-  assert(s1.ach === "waiting", "ach waiting before unlock");
-  assert(!!s1.achUnlockAt, "achUnlockAt set while waiting");
-
-  const afterUnlock = new Date(new Date(planCompletedAt).getTime() + ACH_UNLOCK_DELAY_MIN * 60000 + 1000);
-  const s2 = getTodayState({ questions: Q, answers, status: null, config, now: afterUnlock });
-  assert(s2.ach === "open", "ach open after unlock delay");
+  assert(s1.ach === "open", "ach unlocks immediately after goal");
 }
 
 // question added mid-day after plan_completed_at stays done

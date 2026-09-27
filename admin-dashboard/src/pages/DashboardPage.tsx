@@ -33,9 +33,8 @@ function nowISTTime(): string {
   return new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour12: false });
 }
 
-const ACH_UNLOCK_DELAY_MIN = 120;
 
-type TodayStatus = "not_started" | "goal_done" | "waiting_ach" | "ach_done" | "missed" | "on_leave";
+type TodayStatus = "not_started" | "goal_done" | "ach_done" | "missed" | "on_leave";
 
 interface EmployeeStatus {
   employee: Employee;
@@ -127,8 +126,7 @@ export default function DashboardPage() {
             status = "missed";
             defaulterList.push({ employee: emp, reason: "Missed Ach" });
           } else {
-            const unlockAt = new Date(planCompletedAt).getTime() + ACH_UNLOCK_DELAY_MIN * 60000;
-            status = Date.now() < unlockAt ? "goal_done" : "waiting_ach";
+            status = "goal_done";
           }
         } else {
           status = "ach_done";
@@ -157,7 +155,7 @@ export default function DashboardPage() {
     total: statuses.length,
     completed: statuses.filter((s) => s.status === "ach_done").length,
     pending: statuses.filter((s) =>
-      ["not_started", "goal_done", "waiting_ach"].includes(s.status)
+      ["not_started", "goal_done"].includes(s.status)
     ).length,
     onLeave: statuses.filter((s) => s.status === "on_leave").length,
     defaulted: statuses.filter((s) => s.status === "missed").length,
@@ -184,11 +182,6 @@ export default function DashboardPage() {
     goal_done: {
       label: "Goal Done",
       badge: "badge-info",
-      icon: <Clock size={14} />,
-    },
-    waiting_ach: {
-      label: "Waiting Ach",
-      badge: "badge-warning",
       icon: <Clock size={14} />,
     },
     ach_done: {

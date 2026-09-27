@@ -3,7 +3,7 @@
  * No framework — plain asserts, exits non-zero on failure.
  */
 import assert from "node:assert";
-import { getTodayState, ACH_UNLOCK_DELAY_MIN, type GetTodayStateArgs } from "./utils";
+import { getTodayState, type GetTodayStateArgs } from "./utils";
 
 const Q1 = { id: "q1" };
 const Q2 = { id: "q2" };
@@ -34,7 +34,6 @@ function base(overrides: Partial<GetTodayStateArgs> = {}): GetTodayStateArgs {
   const s = getTodayState(base({ now: istDate(8, 0) }));
   assert.strictEqual(s.plan, "open", "plan should be open before deadline");
   assert.strictEqual(s.ach, "locked", "ach locked while plan not done");
-  assert.strictEqual(s.achUnlockAt, null);
 }
 
 // 2. Plan done via status timestamp.
@@ -67,7 +66,7 @@ function base(overrides: Partial<GetTodayStateArgs> = {}): GetTodayStateArgs {
   assert.strictEqual(s.ach, "locked");
 }
 
-// 5. Plan done via answers (id-set match, no status timestamp) -> ach waiting.
+// 5. Plan done via answers (id-set match, no status timestamp) -> ach open immediately.
 {
   const answeredAt = istDate(8, 0).toISOString();
   const s = getTodayState(
@@ -80,25 +79,16 @@ function base(overrides: Partial<GetTodayStateArgs> = {}): GetTodayStateArgs {
     })
   );
   assert.strictEqual(s.plan, "done");
-  assert.strictEqual(s.ach, "waiting");
-  assert.ok(s.achUnlockAt, "achUnlockAt should be set once plan is done");
+  assert.strictEqual(s.ach, "open", "ach unlocks immediately after goal");
 }
 
-// 6. 2h unlock boundary: just before vs at/after ACH_UNLOCK_DELAY_MIN.
+// 6. Ach opens the moment plan_completed_at is set.
 {
   const completedAt = istDate(10, 0).toISOString();
-  const beforeUnlock = getTodayState(
-    base({ status: { plan_completed_at: completedAt, ach_completed_at: null }, now: istDate(11, 59) })
+  const s = getTodayState(
+    base({ status: { plan_completed_at: completedAt, ach_completed_at: null }, now: istDate(10, 0) })
   );
-  assert.strictEqual(beforeUnlock.ach, "waiting");
-
-  const atUnlock = getTodayState(
-    base({
-      status: { plan_completed_at: completedAt, ach_completed_at: null },
-      now: new Date(new Date(completedAt).getTime() + ACH_UNLOCK_DELAY_MIN * 60000),
-    })
-  );
-  assert.strictEqual(atUnlock.ach, "open", "ach should open exactly at the 2h mark");
+  assert.strictEqual(s.ach, "open");
 }
 
 // 7. Ach open -> done once all active ids answered.

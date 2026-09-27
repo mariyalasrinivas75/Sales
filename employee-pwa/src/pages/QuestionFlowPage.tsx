@@ -301,8 +301,6 @@ export default function QuestionFlowPage() {
     const achLabel =
       todayState.ach === "locked"
         ? "Complete goal first"
-        : todayState.ach === "waiting"
-        ? `Unlocks at ${todayState.achUnlockAt}`
         : todayState.ach === "done"
         ? "Done ✓"
         : todayState.ach === "missed"

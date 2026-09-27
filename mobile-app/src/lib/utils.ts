@@ -89,8 +89,6 @@ export function currentISTTime(): string {
 
 // ── Today state (plan/achievement gating) ──
 
-export const ACH_UNLOCK_DELAY_MIN = 120;
-
 function istTimeOfDay(d: Date): string {
   return d.toLocaleTimeString("en-US", {
     timeZone: "Asia/Kolkata",
@@ -101,14 +99,6 @@ function istTimeOfDay(d: Date): string {
   });
 }
 
-function istHHMM(d: Date): string {
-  return d.toLocaleTimeString("en-US", {
-    timeZone: "Asia/Kolkata",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 interface TodayStateQuestion {
   id: string;
@@ -141,8 +131,7 @@ export interface GetTodayStateArgs {
 
 export interface TodayState {
   plan: "open" | "done" | "missed";
-  ach: "locked" | "waiting" | "open" | "done" | "missed";
-  achUnlockAt: string | null; // "HH:MM" IST, or null while ach is locked
+  ach: "locked" | "open" | "done" | "missed";
   onLeave: boolean;
 }
 
@@ -168,35 +157,20 @@ export function getTodayState({ questions, answers, status, config, now }: GetTo
   else if (nowTime >= amDeadline) plan = "missed";
   else plan = "open";
 
+  // Achievements unlock as soon as the goal is done.
   let ach: TodayState["ach"];
-  let achUnlockAt: string | null = null;
-
   if (!planDone) {
     ach = "locked";
   } else {
-    let anchor: Date;
-    if (status?.plan_completed_at) {
-      anchor = new Date(status.plan_completed_at);
-    } else {
-      const times = planAnswers
-        .map((a) => a.answered_at)
-        .filter((t): t is string => !!t)
-        .map((t) => new Date(t).getTime());
-      anchor = times.length > 0 ? new Date(Math.max(...times)) : now;
-    }
-    const unlockDate = new Date(anchor.getTime() + ACH_UNLOCK_DELAY_MIN * 60000);
-    achUnlockAt = istHHMM(unlockDate);
-
     const achAnswers = answers.filter((a) => a.phase === "ach" && activeIds.has(a.question_id));
     const achAnsweredIds = new Set(achAnswers.map((a) => a.question_id));
     const achDoneByAnswers = activeIds.size > 0 && [...activeIds].every((id) => achAnsweredIds.has(id));
     const achDone = !!status?.ach_completed_at || achDoneByAnswers;
 
-    if (now.getTime() < unlockDate.getTime()) ach = "waiting";
-    else if (achDone) ach = "done";
+    if (achDone) ach = "done";
     else if (nowTime >= pmDeadline) ach = "missed";
     else ach = "open";
   }
 
-  return { plan, ach, achUnlockAt, onLeave };
+  return { plan, ach, onLeave };
 }

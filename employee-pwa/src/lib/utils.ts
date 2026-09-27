@@ -117,9 +117,6 @@ export function currentISTTime(): string {
 // ── Today state (plan/achievement gating) ──
 // Mirrored in mobile-app/src/lib/utils.ts — keep semantics identical.
 
-/** Minutes after plan completion before achievements unlock. */
-export const ACH_UNLOCK_DELAY_MIN = 120;
-
 interface TodayStateQuestion {
   id: string;
   active?: boolean;
@@ -144,9 +141,7 @@ interface TodayStateConfig {
 
 export interface TodayState {
   plan: "open" | "done" | "missed";
-  ach: "locked" | "waiting" | "open" | "done" | "missed";
-  /** HH:MM in IST, only set while ach is 'waiting' (or already past, still informative). */
-  achUnlockAt: string | null;
+  ach: "locked" | "open" | "done" | "missed";
   onLeave: boolean;
 }
 
@@ -160,14 +155,6 @@ function istTimeString(date: Date): string {
   });
 }
 
-function istHHMM(date: Date): string {
-  return date.toLocaleTimeString("en-US", {
-    timeZone: "Asia/Kolkata",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export function getTodayState({
   questions,
@@ -198,7 +185,7 @@ export function getTodayState({
 
   if (plan !== "done") {
     // Strict: no goal, no achievement — even a partially-done/missed plan keeps ach locked all day.
-    return { plan, ach: "locked", achUnlockAt: null, onLeave };
+    return { plan, ach: "locked", onLeave };
   }
 
   const achAnswers = answers.filter((a) => a.phase === "ach" && activeIds.has(a.question_id));
@@ -207,33 +194,14 @@ export function getTodayState({
     activeIds.size > 0 && [...activeIds].every((id) => achAnsweredIds.has(id));
   const achDone = !!status?.ach_completed_at || achDoneByAnswers;
 
-  // Unlock anchor: trust plan_completed_at first; fall back to the latest plan
-  // answer's timestamp so edits/admin changes mid-day don't move it.
-  let unlockBase: string | null = status?.plan_completed_at ?? null;
-  if (!unlockBase) {
-    const times = planAnswers.map((a) => a.answered_at).filter((t): t is string => !!t);
-    if (times.length > 0) {
-      unlockBase = times.reduce((latest, t) => (t > latest ? t : latest), times[0]);
-    }
-  }
-
-  let achUnlockAt: string | null = null;
-  let unlockAtMs: number | null = null;
-  if (unlockBase) {
-    unlockAtMs = new Date(unlockBase).getTime() + ACH_UNLOCK_DELAY_MIN * 60000;
-    achUnlockAt = istHHMM(new Date(unlockAtMs));
-  }
-
   let ach: TodayState["ach"];
   if (achDone) {
     ach = "done";
-  } else if (unlockAtMs !== null && now.getTime() < unlockAtMs) {
-    ach = "waiting";
   } else if (nowIST >= pmDeadline) {
     ach = "missed";
   } else {
     ach = "open";
   }
 
-  return { plan, ach, achUnlockAt, onLeave };
+  return { plan, ach, onLeave };
 }
